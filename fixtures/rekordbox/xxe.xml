@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE DJ_PLAYLISTS [ <!ENTITY secret SYSTEM "file:///etc/passwd"> ]>
+<DJ_PLAYLISTS Version="1.0.0">
+  <COLLECTION Entries="1">
+    <TRACK TrackID="1" Name="&secret;" Artist="Synthetic"/>
+  </COLLECTION>
+</DJ_PLAYLISTS>

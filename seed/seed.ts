@@ -7,7 +7,7 @@ import { loadConfig } from "../src/config.js";
 import { hashPassword, loadUser } from "../src/lib/auth.js";
 import { systemClock, iso, type Clock } from "../src/lib/clock.js";
 import { normalizeCatno } from "../src/domain/catalog.js";
-import { addCopyPhoto, createCopy, createCrate } from "../src/domain/collection.js";
+import { addCopyPhoto, createCopy, createCrate } from "../src/domain/library.js";
 import { createDraftListing, publishListing, saveShippingProfile } from "../src/domain/listings.js";
 import { addToCart, checkout, transitionOrder } from "../src/domain/orders.js";
 import { acceptProposal, editionAsPayload, submitProposal } from "../src/domain/proposals.js";

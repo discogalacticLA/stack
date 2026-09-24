@@ -5,7 +5,7 @@ import type { AppContext, Flash } from "./context.js";
 import { createSession, findSession, loadUser } from "./lib/auth.js";
 import { DomainError, HttpError } from "./lib/errors.js";
 import { html } from "./lib/html.js";
-import { uploadMiddleware } from "./lib/uploads.js";
+import { importUploadMiddleware, uploadMiddleware } from "./lib/uploads.js";
 import { ValidationError } from "./lib/validation.js";
 import { expireReservations } from "./domain/orders.js";
 import { layout } from "./views/layout.js";
@@ -36,10 +36,12 @@ export function createApp(ctx: AppContext) {
   app.use("/static", express.static(PUBLIC_DIR, { maxAge: ctx.config.isDevelopment ? 0 : "1h" }));
   app.use(express.urlencoded({ extended: true, limit: "200kb" }));
   app.use(express.json({ limit: "100kb" }));
-  // All multipart forms use the field name "images"; parsed before the CSRF check.
+  // Multipart forms are parsed before the CSRF check. Import uploads use the field "file"
+  // (up to 30 MB); every other form uses "images" (photos, up to 5 MB each).
   app.use((req, res, next) => {
-    if (req.is("multipart/form-data")) return uploadMiddleware.array("images")(req, res, next);
-    next();
+    if (!req.is("multipart/form-data")) return next();
+    if (req.path === "/imports") return importUploadMiddleware.single("file")(req, res, next);
+    return uploadMiddleware.array("images")(req, res, next);
   });
 
   // Session + current user.
@@ -80,7 +82,7 @@ export function createApp(ctx: AppContext) {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
-    if (err?.code === "LIMIT_FILE_SIZE") err = new DomainError("Each image must be 5 MB or smaller.", 422);
+    if (err?.code === "LIMIT_FILE_SIZE") err = new DomainError(req.path === "/imports" ? "Import files must be 30 MB or smaller." : "Each image must be 5 MB or smaller.", 422);
     if (err?.code === "LIMIT_FILE_COUNT" || err?.code === "LIMIT_UNEXPECTED_FILE") err = new DomainError("Upload at most 6 images at a time.", 422);
     const isApi = req.path.startsWith("/api/");
     if (err instanceof HttpError && err.status === 401 && !isApi) {
@@ -109,7 +111,7 @@ export function createApp(ctx: AppContext) {
       layout(req, {
         title: status === 404 ? "Not found" : "Problem",
         body: html`<div class="empty"><h1>${status === 404 ? "Not found" : status === 403 ? "Not allowed" : "Something went wrong"}</h1>
-          <p>${message}</p><p><a class="btn btn-quiet" href="/">Back to Discover</a></p></div>`,
+          <p>${message}</p><p><a class="btn btn-quiet" href="/">Back to your library</a></p></div>`,
       }),
     );
   });

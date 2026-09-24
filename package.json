@@ -17,11 +17,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "tsx e2e/walkthrough.ts",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "fixtures:large": "tsx scripts/large-fixtures.ts"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.1",
     "multer": "^2.4.0",
     "zod": "^4.6.5"
   },

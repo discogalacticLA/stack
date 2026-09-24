@@ -19,6 +19,12 @@ export const uploadMiddleware = multer({
   limits: { fileSize: MAX_UPLOAD_BYTES, files: MAX_FILES },
 });
 
+/** Import files (CSV/XML) are held in memory only long enough to parse; never stored as uploads. */
+export const importUploadMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024, files: 1 },
+});
+
 export function detectImageExt(buf: Buffer): string | null {
   return SIGNATURES.find((s) => s.test(buf))?.ext ?? null;
 }

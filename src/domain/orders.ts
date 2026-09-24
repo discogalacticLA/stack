@@ -341,10 +341,10 @@ export function addPurchaseToCollection(db: DB, clock: Clock, buyerId: number, l
       db
         .prepare(
           `INSERT INTO copies (owner_id, edition_id, media_condition, sleeve_condition, acquired_on, acquired_from, acquisition_cost_cents,
-             acquisition_currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             acquisition_currency, date_added, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(buyerId, line.edition_id, line.media_condition_snapshot, line.sleeve_condition_snapshot, now.slice(0, 10),
-          `Simulated order #${line.oid} from ${line.seller_name_snapshot}`, line.price_cents, line.currency, now, now).lastInsertRowid,
+          `Simulated order #${line.oid} from ${line.seller_name_snapshot}`, line.price_cents, line.currency, now, now, now).lastInsertRowid,
     );
     db.prepare("UPDATE order_lines SET buyer_copy_id = ? WHERE id = ?").run(copyId, lineId);
     return copyId;

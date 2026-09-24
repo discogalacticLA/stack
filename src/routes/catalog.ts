@@ -89,17 +89,17 @@ function saleText(r: SearchResult): SafeHtml {
 
 export function registerCatalogRoutes(app: Express, ctx: AppContext) {
   // ───────────────────────── Discover ─────────────────────────
-  app.get("/", (req, res) => {
+  app.get("/discover", (req, res) => {
     const p = parseSearch(req.query);
     const { total, results } = searchReleases(ctx.db, p);
     const facets = facetValues(ctx.db);
-    const selfUrl = `/?${toQuery(p)}`;
+    const selfUrl = `/discover?${toQuery(p)}`;
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const filtersActive = p.terms.length + p.formats.length + p.countries.length + (p.yearFrom ? 1 : 0) + (p.yearTo ? 1 : 0) + (p.forSale ? 1 : 0);
 
     const chips: SafeHtml[] = [];
     const chip = (label: string, overrides: Record<string, string | string[] | null>) =>
-      chips.push(html`<a class="chip" href="/?${toQuery(p, { ...overrides, page: null })}" aria-label="Remove filter: ${label}">${label} <span aria-hidden="true">×</span></a>`);
+      chips.push(html`<a class="chip" href="/discover?${toQuery(p, { ...overrides, page: null })}" aria-label="Remove filter: ${label}">${label} <span aria-hidden="true">×</span></a>`);
     if (p.q) chip(`Search: “${p.q}”`, { q: null });
     p.terms.forEach((t) => chip(`Genre/style: ${t}`, { term: p.terms.filter((x) => x !== t) }));
     p.formats.forEach((f) => chip(`Format: ${f}`, { format: p.formats.filter((x) => x !== f) }));
@@ -133,10 +133,10 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
       : html`<div class="empty">
           <h2>No releases match</h2>
           ${p.terms.length > 1 && p.termMode === "all"
-            ? html`<p>You asked for releases tagged with <strong>all</strong> of: ${p.terms.join(", ")}. Try <a href="/?${toQuery(p, { mode: null, page: null })}">matching any of them</a> instead.</p>`
+            ? html`<p>You asked for releases tagged with <strong>all</strong> of: ${p.terms.join(", ")}. Try <a href="/discover?${toQuery(p, { mode: null, page: null })}">matching any of them</a> instead.</p>`
             : ""}
-          ${p.forSale ? html`<p>You're only seeing releases with copies for sale. <a href="/?${toQuery(p, { sale: null, page: null })}">Include archive-only entries</a>.</p>` : ""}
-          ${filtersActive ? html`<p>Remove a filter above, or <a href="/?${toQuery(p, { term: [], format: [], country: [], year_from: null, year_to: null, sale: null, mode: null, page: null })}">reset all filters</a> and keep your search.</p>` : ""}
+          ${p.forSale ? html`<p>You're only seeing releases with copies for sale. <a href="/discover?${toQuery(p, { sale: null, page: null })}">Include archive-only entries</a>.</p>` : ""}
+          ${filtersActive ? html`<p>Remove a filter above, or <a href="/discover?${toQuery(p, { term: [], format: [], country: [], year_from: null, year_to: null, sale: null, mode: null, page: null })}">reset all filters</a> and keep your search.</p>` : ""}
           ${p.q ? html`<p class="muted">Search matches artist, release title, label and catalog number. Catalog numbers match with or without spaces and dashes.</p>` : ""}
         </div>`;
 
@@ -144,7 +144,7 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
       title: p.q ? `“${p.q}”` : "Discover",
       nav: "discover",
       wide: true,
-      body: html`<form method="get" action="/" id="discover-form" class="discover">
+      body: html`<form method="get" action="/discover" id="discover-form" class="discover">
         <aside class="filters" aria-label="Filters">
           <h2 class="sr-only">Filters</h2>
           <fieldset>
@@ -177,7 +177,7 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
           <p class="explain">Different filter groups combine: a result must satisfy every group you use.</p>
           <input type="hidden" name="view" value="${p.view}">
           <div class="actions"><button class="btn" type="submit">Apply filters</button>
-          ${filtersActive || p.q ? html`<a class="btn btn-quiet" href="/${p.view === "list" ? "?view=list" : ""}">Clear all</a>` : ""}</div>
+          ${filtersActive || p.q ? html`<a class="btn btn-quiet" href="/discover${p.view === "list" ? "?view=list" : ""}">Clear all</a>` : ""}</div>
         </aside>
         <section aria-labelledby="results-heading">
           <div class="searchbar" role="search">
@@ -186,7 +186,7 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
             <button class="btn btn-primary" type="submit">Search</button>
           </div>
           ${chips.length ? html`<div class="active-filters" aria-label="Active filters">${chips}
-            ${chips.length > 1 ? html`<a class="chip" href="/${p.view === "list" ? "?view=list" : ""}">Clear all</a>` : ""}</div>` : ""}
+            ${chips.length > 1 ? html`<a class="chip" href="/discover${p.view === "list" ? "?view=list" : ""}">Clear all</a>` : ""}</div>` : ""}
           <div class="toolbar">
             <div class="left"><h1 id="results-heading" class="h-results">${total} release${total === 1 ? "" : "s"}${p.forSale ? " with copies for sale" : " in the archive"}</h1></div>
             <div class="right">
@@ -194,14 +194,14 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
               <select id="f-sort" name="sort">${Object.entries(SORT_LABELS).map(([k, v]) => html`<option value="${k}"${k === p.sort ? raw(" selected") : ""}>${v}</option>`)}</select>
               <button class="btn btn-quiet btn-sm" type="submit">Sort</button>
               <span class="segmented" aria-label="View">
-                <a href="/?${toQuery(p, { view: null })}" aria-current="${p.view === "grid"}">Artwork</a>
-                <a href="/?${toQuery(p, { view: "list" })}" aria-current="${p.view === "list"}">Compact list</a>
+                <a href="/discover?${toQuery(p, { view: null })}" aria-current="${p.view === "grid"}">Artwork</a>
+                <a href="/discover?${toQuery(p, { view: "list" })}" aria-current="${p.view === "list"}">Compact list</a>
               </span>
             </div>
           </div>
           ${resultsHtml}
-          ${pagination("/", toQuery(p, { page: null }), p.page, total, PAGE_SIZE)}
-          ${p.page > pages ? html`<p><a href="/?${toQuery(p, { page: null })}">Go to the first page</a></p>` : ""}
+          ${pagination("/discover", toQuery(p, { page: null }), p.page, total, PAGE_SIZE)}
+          ${p.page > pages ? html`<p><a href="/discover?${toQuery(p, { page: null })}">Go to the first page</a></p>` : ""}
         </section>
       </form>`,
     });
@@ -220,11 +220,11 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
       title: `${r.artist} – ${r.title}`,
       nav: "discover",
       body: html`
-        <nav class="crumbs" aria-label="Breadcrumb">${back ? html`<a href="${back}">← Back to results</a> <span aria-hidden="true">/</span>` : html`<a href="/">Discover</a> /`} <span>Release</span></nav>
+        <nav class="crumbs" aria-label="Breadcrumb">${back ? html`<a href="${back}">← Back to results</a> <span aria-hidden="true">/</span>` : html`<a href="/discover">Discover</a> /`} <span>Release</span></nav>
         <p class="muted small">${r.release_type.toUpperCase()} · Release (shared identity across editions)</p>
         <h1>${r.title}</h1>
         <p class="lead"><strong>${r.artists.map((a: any) => html`${a.name}${a.join_text}`)}</strong></p>
-        <p>${[...r.genres, ...r.styles].map((t: string) => html`<a class="chip" href="/?term=${encodeURIComponent(t)}">${t}</a> `)}</p>
+        <p>${[...r.genres, ...r.styles].map((t: string) => html`<a class="chip" href="/discover?term=${encodeURIComponent(t)}">${t}</a> `)}</p>
         ${r.description ? html`<p>${r.description}</p>` : ""}
         <div class="action-row">
           ${user
@@ -272,7 +272,7 @@ export function registerCatalogRoutes(app: Express, ctx: AppContext) {
       nav: "discover",
       body: html`
         <nav class="crumbs" aria-label="Breadcrumb">
-          ${back ? html`<a href="${back}">← Back to results</a> <span aria-hidden="true">/</span>` : html`<a href="/">Discover</a> <span aria-hidden="true">/</span>`}
+          ${back ? html`<a href="${back}">← Back to results</a> <span aria-hidden="true">/</span>` : html`<a href="/discover">Discover</a> <span aria-hidden="true">/</span>`}
           <a href="/releases/${r.id}${back ? `?back=${encodeURIComponent(back)}` : ""}">${r.title}</a> <span aria-hidden="true">/</span> <span>Edition ${e.catalog_number ?? ""}</span>
         </nav>
         <div class="detail">

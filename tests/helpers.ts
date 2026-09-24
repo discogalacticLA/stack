@@ -36,7 +36,7 @@ export async function agentFor(env: TestEnv, username?: string) {
   if (username) {
     const r = await agent.post("/login").type("form").send({ _csrf: token, username, password: DEMO_PASSWORD });
     if (r.status !== 303) throw new Error(`login failed for ${username}: ${r.status}`);
-    token = csrfFrom((await agent.get("/")).text);
+    token = csrfFrom((await agent.get("/library")).text);
   }
   return {
     agent,
@@ -47,7 +47,7 @@ export async function agentFor(env: TestEnv, username?: string) {
 
 /** A fresh private copy + published listing for `owner`, created through domain code. */
 export async function makeListing(env: TestEnv, owner: string, editionKey = "nb-orig", price = "30.00") {
-  const { createCopy, addCopyPhoto } = await import("../src/domain/collection.js");
+  const { createCopy, addCopyPhoto } = await import("../src/domain/library.js");
   const { createDraftListing, publishListing } = await import("../src/domain/listings.js");
   const uid = env.seed.users[owner];
   const copyId = createCopy(env.db, env.clock, uid, env.seed.editions[editionKey], {

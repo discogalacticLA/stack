@@ -8,7 +8,9 @@ export const MEDIA_CONDITIONS = [
   { code: "VG", label: "Very Good (VG)", note: "Visible marks; some surface noise on quiet passages." },
   { code: "G+", label: "Good Plus (G+)", note: "Noticeable noise; plays through without skipping." },
   { code: "G", label: "Good (G)", note: "Heavy wear; for completists or DJ tool use." },
+  { code: "F", label: "Fair (F)", note: "Heavy wear and noise; still plays." },
   { code: "P", label: "Poor (P)", note: "Damaged; may skip." },
+  { code: "NG", label: "Not graded", note: "No grade recorded (common for imported entries)." },
 ] as const;
 
 export const SLEEVE_CONDITIONS = [

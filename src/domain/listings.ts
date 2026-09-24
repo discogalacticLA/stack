@@ -8,7 +8,7 @@ import { COUNTRY_CODES, MEDIA_CODES, SLEEVE_CODES, conditionRank } from "../lib/
 import { quoteShipping, type ShippingProfile, type ShippingQuote } from "../lib/shipping.js";
 import { asIdArray, moneyField, parse, requiredText } from "../lib/validation.js";
 import { artistCredit } from "./catalog.js";
-import { getOwnCopy } from "./collection.js";
+import { getOwnCopy } from "./library.js";
 
 export const ACTIVE_LISTING_STATUSES = ["draft", "available", "reserved", "sold"] as const;
 
@@ -43,6 +43,8 @@ export function createDraftListing(db: DB, clock: Clock, sellerId: number, copyI
   const input = parse(listingSchema, raw);
   return db.transaction(() => {
     const copy = getOwnCopy(db, sellerId, copyId);
+    // Listings must describe a real physical copy of a known archive edition (never a digital file).
+    if (copy.edition_id == null) throw new DomainError("Link this copy to an archive edition before listing it, so buyers know exactly which pressing it is.", 422);
     validateOwnedRefs(db, sellerId, copyId, input.shipping_profile_id, input.photo_ids);
     const existing = db
       .prepare(`SELECT id, status FROM listings WHERE copy_id = ? AND status IN (${ACTIVE_LISTING_STATUSES.map(() => "?").join(",")})`)

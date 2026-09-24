@@ -11,7 +11,6 @@ import {
   ACTION_LABEL, addPurchaseToCollection, addToCart, checkout, getCart, getOrderForParticipant, listOrders, removeFromCart, STATUS_LABEL,
   transitionOrder, type OrderAction, type OrderStatus,
 } from "../domain/orders.js";
-import { addWant, listWants, removeWant } from "../domain/wants.js";
 import { copyPhoto, csrf, errorSummary, grade, money, selectField, simulatedNotice, statusBadge, textField } from "../views/components.js";
 import { idParam, me, page } from "./helpers.js";
 
@@ -79,7 +78,7 @@ export function registerOrderRoutes(app: Express, ctx: AppContext) {
                 </div>
                 <div class="actions">${allShippable ? html`<a class="btn btn-primary" href="/checkout?dest=${dest}">Continue to simulated checkout</a>` : html`<span class="btn btn-quiet" aria-disabled="true">Checkout unavailable: fix shipping above</span>`}</div>`
               : ""}`
-          : html`<div class="empty"><h2>Your cart is empty</h2><p>Find a release in <a href="/">Discover</a> and open “copies for sale”.</p></div>`}`,
+          : html`<div class="empty"><h2>Your cart is empty</h2><p>Find a release in <a href="/discover">Discover</a> and open “copies for sale”.</p></div>`}`,
     });
   });
 
@@ -237,42 +236,5 @@ export function registerOrderRoutes(app: Express, ctx: AppContext) {
     const copyId = addPurchaseToCollection(ctx.db, ctx.clock, user.id, idParam(req));
     addFlash(req, "success", "Added to your collection as a private copy.");
     res.redirect(303, `/copies/${copyId}`);
-  });
-
-  // ───────── Wants ─────────
-  app.get("/wants", (req, res) => {
-    const user = me(req);
-    const wants = listWants(ctx.db, user.id);
-    page(req, res, {
-      title: "Wants",
-      nav: "wants",
-      body: html`<h1>Wants</h1>
-        <p class="muted">Private list of releases or specific editions you're looking for. Sellers can't see it.</p>
-        ${wants.length
-          ? html`<div class="table-wrap"><table class="compact"><thead><tr><th>Release</th><th>Edition</th><th>Market</th><th></th></tr></thead><tbody>
-            ${wants.map((w) => html`<tr><td><a href="/releases/${w.release_id}"><strong>${w.artist}</strong> — ${w.title}</a></td>
-              <td>${w.edition_id ? html`<a href="/editions/${w.edition_id}"><span class="catno">${w.catalog_number ?? "—"}</span> ${w.format} ${w.country ?? ""} ${w.release_year ?? ""}</a>` : html`<span class="muted">Any edition</span>`}</td>
-              <td>${w.for_sale ? html`<a class="forsale" href="${w.edition_id ? `/editions/${w.edition_id}/offers` : `/releases/${w.release_id}#editions`}">${w.for_sale} for sale from ${money(w.min_price)}</a>` : html`<span class="archive-only">None for sale</span>`}</td>
-              <td><form method="post" action="/wants/${w.id}/remove">${csrf(req)}<button class="btn btn-quiet btn-sm" type="submit">Remove</button></form></td></tr>`)}
-          </tbody></table></div>`
-          : html`<div class="empty"><h2>No wants yet</h2><p>Use “Want” on any release or edition page.</p></div>`}`,
-    });
-  });
-
-  app.post("/wants", (req, res) => {
-    const user = me(req);
-    const editionId = req.body.edition_id ? Number(req.body.edition_id) : null;
-    const releaseId = Number(req.body.release_id);
-    addWant(ctx.db, ctx.clock, user.id, releaseId, editionId);
-    addFlash(req, "success", editionId ? "Edition added to your wants." : "Release added to your wants (any edition).");
-    res.redirect(303, editionId ? `/editions/${editionId}` : `/releases/${releaseId}`);
-  });
-
-  app.post("/wants/:id/remove", (req, res) => {
-    const user = me(req);
-    removeWant(ctx.db, user.id, idParam(req));
-    addFlash(req, "success", "Removed from wants.");
-    const ref = req.get("referer");
-    res.redirect(303, ref && new URL(ref).host === req.get("host") ? new URL(ref).pathname : "/wants");
   });
 }

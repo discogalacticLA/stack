@@ -7,7 +7,7 @@ import { centsToInput } from "../lib/money.js";
 import { COUNTRY_CODES, countryName, MEDIA_CONDITIONS, SLEEVE_CONDITIONS } from "../lib/reference.js";
 import { quoteShipping, zoneLabel, type ShippingProfile } from "../lib/shipping.js";
 import { ValidationError, type FieldErrors } from "../lib/validation.js";
-import { getOwnCopy } from "../domain/collection.js";
+import { getOwnCopy } from "../domain/library.js";
 import {
   createDraftListing, getOwnListing, listSellerListings, listShippingProfiles, publishListing, saveShippingProfile, updateListing, withdrawListing,
 } from "../domain/listings.js";

@@ -4,7 +4,7 @@ import { html, type SafeHtml } from "../lib/html.js";
 import { cartCount } from "../domain/orders.js";
 import { csrf, flashes } from "./components.js";
 
-export const APP_NAME = "Record Archive";
+export const APP_NAME = "Music Library Project";
 
 export interface PageOpts {
   title: string;
@@ -27,22 +27,25 @@ export function layout(req: Request, o: PageOpts): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${o.title} · ${APP_NAME} (prototype)</title>
+<title>${o.title} · ${APP_NAME}</title>
 <link rel="stylesheet" href="/static/styles.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='7.5' fill='%231d1b18'/%3E%3Ccircle cx='8' cy='8' r='2.5' fill='%23b0431f'/%3E%3C/svg%3E">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<div class="proto-banner" role="note">Prototype · synthetic demo catalog · every transaction is <strong>simulated</strong> — no real money, shipping or messages.</div>
+<div class="proto-banner" role="note">Local prototype · sample data is synthetic · marketplace transactions are <strong>simulated</strong> — no real money, shipping or messages.</div>
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="/"><span class="brand-mark" aria-hidden="true"></span>${APP_NAME}<span class="brand-note">working title</span></a>
     <nav class="mainnav" aria-label="Main">
-      ${nav("discover", "/", "Discover")}
-      ${user ? nav("collection", "/collection", "Collection") : ""}
-      ${user ? nav("wants", "/wants", "Wants") : ""}
-      ${user ? nav("selling", "/selling", "Selling") : ""}
+      ${user ? nav("library", "/library", "Library") : ""}
+      ${user ? nav("crates", "/crates", "Crates") : ""}
+      ${user ? nav("charts", "/charts", "Top 5") : ""}
+      ${user ? nav("wants", "/wants", "Wantlist") : ""}
+      ${user ? nav("imports", "/imports", "Import") : ""}
+      ${nav("discover", "/discover", "Archive")}
+      ${user ? nav("selling", "/selling", "Sell") : ""}
       ${user ? nav("orders", "/orders", "Orders") : ""}
       ${hasRole(user, "contributor") ? nav("contribute", "/contribute", "Contribute") : ""}
       ${hasRole(user, "moderator") ? nav("moderate", "/moderate", "Moderate") : ""}
@@ -72,8 +75,9 @@ ${flashes(req)}
 ${o.body}
 </main>
 <footer class="footer">
-  <p>${APP_NAME} is a local prototype with a placeholder name. Catalog entries, artists, labels and artwork are synthetic.
-  Prices are in USD as a demo currency. Taxes and duties are not calculated.</p>
+  <p>${APP_NAME} is a local prototype with a temporary name. “Know what you have. Organize it your way. Share your taste. Discover what comes next.”
+  Sample catalog entries, artists, labels, artwork and import files are synthetic. Your library, notes, file paths and storage locations are private.
+  Marketplace prices are in USD as a demo currency; taxes are not calculated.</p>
 </footer>
 </body>
 </html>`.value;
