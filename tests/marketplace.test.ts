@@ -18,8 +18,8 @@ describe("one active listing per copy", () => {
     expect(() => createDraftListing(env.db, env.clock, env.seed.users.sol, copyId, input)).toThrow(/already has/);
     // Even bypassing the domain check, the partial unique index refuses it.
     expect(() =>
-      env.db.prepare(`INSERT INTO listings (copy_id, seller_id, edition_id, price_cents, currency, media_condition, sleeve_condition, condition_description, shipping_profile_id, status, created_at, updated_at)
-        SELECT copy_id, seller_id, edition_id, 100, 'USD', 'VG', 'VG', 'x', shipping_profile_id, 'available', 'now', 'now' FROM listings WHERE copy_id = ?`).run(copyId),
+      env.db.prepare(`INSERT INTO listings (copy_id, seller_id, release_id, price_cents, currency, media_condition, sleeve_condition, condition_description, shipping_profile_id, status, created_at, updated_at)
+        SELECT copy_id, seller_id, release_id, 100, 'USD', 'VG', 'VG', 'x', shipping_profile_id, 'available', 'now', 'now' FROM listings WHERE copy_id = ?`).run(copyId),
     ).toThrow(/UNIQUE/);
   });
 
@@ -213,8 +213,8 @@ describe("snapshots and totals", () => {
     // Shipping profile change.
     env.db.prepare("UPDATE shipping_profiles SET world_first = 9999 WHERE id = ?").run(env.seed.ship.sol);
     // Archive correction changes the catalog number and label of the edition.
-    const payload = editionAsPayload(env.db, env.seed.editions["nb-orig"]);
-    const p = submitProposal(env.db, env.clock, env.user("cato"), { kind: "correction", release_id: env.seed.releases["Nightbus Dialogues"], target_edition_id: env.seed.editions["nb-orig"], imagePaths: [],
+    const payload = editionAsPayload(env.db, env.seed.releases["nb-orig"]);
+    const p = submitProposal(env.db, env.clock, env.user("cato"), { kind: "correction", master_id: env.seed.masters["Nightbus Dialogues"], target_release_id: env.seed.releases["nb-orig"], imagePaths: [],
       body: { ...payload, catalog_number: "LLR-004-CHANGED", label_name: "Renamed Label", source_kind: "other", source_citation: "test", source_notes: "a test correction note" } as any });
     if (!p.ok) throw new Error("expected proposal");
     acceptProposal(env.db, env.clock, env.user("moss"), p.proposalId, null);

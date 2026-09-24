@@ -369,7 +369,7 @@ describe("authorization and privacy for imported data", () => {
     const anon = await agentFor(env);
     const sol = await agentFor(env, "sol");
     for (const a of [anon, sol]) {
-      for (const url of ["/discover", "/discover?q=Nightbus", "/api/search?q=Nightbus", `/releases/${env.seed.releases["Nightbus Dialogues"]}`, `/editions/${env.seed.editions["nb-orig"]}`, `/api/editions/${env.seed.editions["nb-orig"]}/offers`]) {
+      for (const url of ["/discover", "/discover?q=Nightbus", "/api/search?q=Nightbus", `/masters/${env.seed.masters["Nightbus Dialogues"]}`, `/releases/${env.seed.releases["nb-orig"]}`, `/api/v1/releases/${env.seed.releases["nb-orig"]}/offers`]) {
         const t = (await a.get(url)).text;
         for (const secret of ["/Users/sample", "Needle-dropped", "Bought at a record fair", "Box A", "Sunday brunch opener"]) expect(t, `${url} leaked ${secret}`).not.toContain(secret);
       }

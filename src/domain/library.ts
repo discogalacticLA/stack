@@ -86,10 +86,10 @@ function assertCrateOwned(db: DB, ownerId: number, crateId: number | null) {
   if (!db.prepare("SELECT 1 FROM crates WHERE id = ? AND owner_id = ?").get(crateId, ownerId)) throw new DomainError("That crate does not exist.", 422);
 }
 
-function insertCopy(db: DB, clock: Clock, ownerId: number, editionId: number | null, input: any, extra: Record<string, unknown> = {}): number {
+function insertCopy(db: DB, clock: Clock, ownerId: number, releaseId: number | null, input: any, extra: Record<string, unknown> = {}): number {
   const now = iso(clock.now());
   const cols: Record<string, unknown> = {
-    owner_id: ownerId, edition_id: editionId,
+    owner_id: ownerId, release_id: releaseId,
     artist_text: input.artist_text ?? null, title_text: input.title_text ?? null, label_text: input.label_text ?? null,
     catno_text: input.catno_text ?? null, format_group: input.format_group ?? null, format_raw: input.format_raw ?? null,
     release_year: input.release_year ?? null, genre_text: input.genre_text ?? null,
@@ -103,20 +103,20 @@ function insertCopy(db: DB, clock: Clock, ownerId: number, editionId: number | n
   return Number(db.prepare(`INSERT INTO copies (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(...keys.map((k) => cols[k])).lastInsertRowid);
 }
 
-/** Adds a copy of an archive edition. Private by default and not for sale. */
-export function createCopy(db: DB, clock: Clock, ownerId: number, editionId: number, raw: unknown): number {
+/** Adds a copy of a catalog release. Private by default and not for sale. */
+export function createCopy(db: DB, clock: Clock, ownerId: number, releaseId: number, raw: unknown): number {
   const input = parse(copySchema, raw);
-  if (!db.prepare("SELECT 1 FROM editions WHERE id = ?").get(editionId)) throw notFound("Edition");
+  if (!db.prepare("SELECT 1 FROM releases WHERE id = ?").get(releaseId)) throw notFound("Release");
   return db.transaction(() => {
     assertCrateOwned(db, ownerId, input.crate_id);
-    const id = insertCopy(db, clock, ownerId, editionId, input);
+    const id = insertCopy(db, clock, ownerId, releaseId, input);
     setTags(db, ownerId, { type: "physical", id }, input.tags);
     if (input.crate_id) addToCrate(db, clock, ownerId, input.crate_id, [{ type: "physical", id }]);
     return id;
   })();
 }
 
-/** Manual entry without an archive edition: descriptive fields stay private to the owner. */
+/** Manual entry without a catalog release: descriptive fields stay private to the owner. */
 export function createManualCopy(db: DB, clock: Clock, ownerId: number, raw: unknown): number {
   const input = parse(manualCopySchema, raw);
   return db.transaction(() => {
@@ -131,7 +131,7 @@ export function createManualCopy(db: DB, clock: Clock, ownerId: number, raw: unk
 export function updateCopy(db: DB, clock: Clock, ownerId: number, copyId: number, raw: unknown) {
   db.transaction(() => {
     const existing = getOwnCopy(db, ownerId, copyId);
-    const unresolved = existing.edition_id == null;
+    const unresolved = existing.release_id == null;
     const input: any = parse(unresolved ? manualCopySchema : copySchema, raw);
     const now = iso(clock.now());
     db.prepare(
@@ -155,10 +155,10 @@ export function getOwnCopy(db: DB, ownerId: number, copyId: number) {
   const copy = db
     .prepare(
       `SELECT c.*, li.artist, li.title, li.label, li.catno, li.format_group AS display_format_group, li.format_raw AS display_format_raw,
-         li.year, li.genre, li.release_id, e.catalog_number, e.format, e.format_details, e.country, e.release_year AS edition_year,
-         lb.name AS edition_label, r.title AS release_title
+         li.year, li.genre, li.master_id, e.catalog_number, e.format, e.format_details, e.country, e.year AS release_year_catalog,
+         lb.name AS release_label, e.title AS release_title
        FROM copies c JOIN library_items li ON li.item_type = 'physical' AND li.item_id = c.id
-       LEFT JOIN editions e ON e.id = c.edition_id LEFT JOIN releases r ON r.id = e.release_id LEFT JOIN labels lb ON lb.id = e.label_id
+       LEFT JOIN releases e ON e.id = c.release_id LEFT JOIN labels lb ON lb.id = e.label_id
        WHERE c.id = ? AND c.owner_id = ?`,
     )
     .get(copyId, ownerId) as any;
@@ -172,12 +172,12 @@ export function getOwnCopy(db: DB, ownerId: number, copyId: number) {
   return copy;
 }
 
-/** Links an unresolved copy to an archive edition — only by explicit user choice. */
-export function linkCopyToEdition(db: DB, clock: Clock, ownerId: number, copyId: number, editionId: number) {
+/** Links an unresolved copy to a catalog release — only by explicit user choice. */
+export function linkCopyToRelease(db: DB, clock: Clock, ownerId: number, copyId: number, releaseId: number) {
   getOwnCopy(db, ownerId, copyId);
-  if (!db.prepare("SELECT 1 FROM editions WHERE id = ?").get(editionId)) throw notFound("Edition");
+  if (!db.prepare("SELECT 1 FROM releases WHERE id = ?").get(releaseId)) throw notFound("Release");
   const now = iso(clock.now());
-  db.prepare("UPDATE copies SET edition_id = ?, updated_at = ?, user_edited_at = ? WHERE id = ? AND owner_id = ?").run(editionId, now, now, copyId, ownerId);
+  db.prepare("UPDATE copies SET release_id = ?, updated_at = ?, user_edited_at = ? WHERE id = ? AND owner_id = ?").run(releaseId, now, now, copyId, ownerId);
 }
 
 // ───────────────────────── Digital holdings ─────────────────────────
@@ -287,15 +287,16 @@ function sourceInfo(db: DB, entryId: number) {
 
 /**
  * Other holdings and wants connected to this item — ONLY through confirmed links: the same
- * archive release (via user-confirmed edition links) or an explicit digital→physical link.
+ * catalog master or release (via user-confirmed catalog links) or an explicit digital→physical link.
  */
 export function relatedHoldings(db: DB, ownerId: number, ref: ItemRef) {
-  const row = db.prepare("SELECT release_id FROM library_items WHERE item_type = ? AND item_id = ? AND owner_id = ?").get(ref.type, ref.id, ownerId) as { release_id: number | null } | undefined;
+  const row = db.prepare("SELECT release_id, master_id FROM library_items WHERE item_type = ? AND item_id = ? AND owner_id = ?").get(ref.type, ref.id, ownerId) as { release_id: number | null; master_id: number | null } | undefined;
   const items: any[] = [];
-  if (row?.release_id) {
+  if (row?.master_id || row?.release_id) {
+    const [col, val, via] = row.master_id ? ["master_id", row.master_id, "same music (catalog master)"] : ["release_id", row.release_id, "same catalog release"];
     items.push(...(db.prepare(
-      "SELECT item_type, item_id, format_group, format_raw, catno FROM library_items WHERE owner_id = ? AND release_id = ? AND NOT (item_type = ? AND item_id = ?)",
-    ).all(ownerId, row.release_id, ref.type, ref.id) as any[]).map((r) => ({ ...r, via: "same archive release" })));
+      `SELECT item_type, item_id, format_group, format_raw, catno FROM library_items WHERE owner_id = ? AND ${col} = ? AND NOT (item_type = ? AND item_id = ?)`,
+    ).all(ownerId, val, ref.type, ref.id) as any[]).map((r) => ({ ...r, via })));
   }
   if (ref.type === "physical") {
     items.push(...(db.prepare("SELECT 'digital' AS item_type, id AS item_id, 'Digital' AS format_group, file_format AS format_raw, NULL AS catno FROM digital_holdings WHERE owner_id = ? AND linked_copy_id = ?")
@@ -305,11 +306,11 @@ export function relatedHoldings(db: DB, ownerId: number, ref: ItemRef) {
     if (d?.linked_copy_id) items.push({ ...(db.prepare("SELECT item_type, item_id, format_group, format_raw, catno FROM library_items WHERE item_type = 'physical' AND item_id = ?").get(d.linked_copy_id) as any), via: "you linked this to a physical copy" });
   }
   const unique = new Map(items.map((i) => [`${i.item_type}:${i.item_id}`, i]));
-  const wants = row?.release_id
+  const wants = row?.master_id || row?.release_id
     ? (db.prepare(
-        `SELECT w.id, w.want_kind, w.configuration_note, e.catalog_number, e.format FROM wants w LEFT JOIN editions e ON e.id = w.edition_id
-         WHERE w.user_id = ? AND w.release_id = ?`,
-      ).all(ownerId, row.release_id) as any[])
+        `SELECT w.id, w.want_kind, w.configuration_note, e.catalog_number, e.format FROM wants w LEFT JOIN releases e ON e.id = w.release_id
+         WHERE w.user_id = ? AND ((? IS NOT NULL AND w.master_id = ?) OR (w.release_id = ?))`,
+      ).all(ownerId, row.master_id, row.master_id, row.release_id) as any[])
     : [];
   return { items: [...unique.values()], wants };
 }
@@ -520,8 +521,8 @@ function whereFor(ownerId: number, f: LibraryFilters) {
     args.push(Number(f.folder.slice(3)));
   } else if (f.folder === "(none)") where.push("li.folder IS NULL AND li.item_type = 'physical'");
   else if (f.folder) { where.push("li.folder = ?"); args.push(f.folder); }
-  if (f.resolved === "yes") where.push("li.edition_id IS NOT NULL");
-  if (f.resolved === "no") where.push("li.edition_id IS NULL");
+  if (f.resolved === "yes") where.push("li.release_id IS NOT NULL");
+  if (f.resolved === "no") where.push("li.release_id IS NULL");
   if (f.batch) { where.push("li.created_by_batch_id = ?"); args.push(Number(f.batch)); }
   const active = "SELECT 1 FROM listings l WHERE l.copy_id = li.item_id AND l.status";
   if (f.status === "private") where.push(`NOT (li.item_type = 'physical' AND EXISTS (${active} IN ('draft','available','reserved','sold')))`);
@@ -544,7 +545,7 @@ export function listLibrary(db: DB, ownerId: number, f: LibraryFilters, sort: Li
   const orderSql = dir === "desc" ? order.split(", ").map((p) => (p.endsWith("IS NULL") ? p : `${p} DESC`)).join(", ") : order;
   const rows = db
     .prepare(
-      `SELECT li.*, (SELECT ai.id FROM archive_images ai WHERE ai.edition_id = li.edition_id ORDER BY ai.kind = 'front' DESC, ai.id LIMIT 1) AS image_id,
+      `SELECT li.*, (SELECT ai.id FROM archive_images ai WHERE ai.release_id = li.release_id ORDER BY ai.kind = 'front' DESC, ai.id LIMIT 1) AS image_id,
          CASE WHEN li.item_type = 'physical' THEN (SELECT l.status FROM listings l WHERE l.copy_id = li.item_id AND l.status != 'withdrawn' ORDER BY l.id DESC LIMIT 1) END AS listing_status
        ${sql} ORDER BY ${orderSql}, li.item_type, li.item_id LIMIT ? OFFSET ?`,
     )
@@ -592,9 +593,9 @@ export function libraryCounts(db: DB, ownerId: number) {
     .prepare(
       `SELECT
         (SELECT COUNT(*) FROM copies WHERE owner_id = ?) AS physical_copies,
-        (SELECT COUNT(DISTINCT edition_id) FROM copies WHERE owner_id = ? AND edition_id IS NOT NULL) AS physical_editions,
-        (SELECT COUNT(*) FROM copies WHERE owner_id = ? AND edition_id IS NULL) AS physical_unresolved,
-        (SELECT COUNT(DISTINCT release_id) FROM library_items WHERE owner_id = ? AND release_id IS NOT NULL) AS releases_linked,
+        (SELECT COUNT(DISTINCT release_id) FROM copies WHERE owner_id = ? AND release_id IS NOT NULL) AS physical_releases,
+        (SELECT COUNT(*) FROM copies WHERE owner_id = ? AND release_id IS NULL) AS physical_unresolved,
+        (SELECT COUNT(DISTINCT master_id) FROM library_items WHERE owner_id = ? AND master_id IS NOT NULL) AS masters_linked,
         (SELECT COUNT(*) FROM digital_holdings WHERE owner_id = ? AND granularity = 'track') AS digital_tracks,
         (SELECT COUNT(*) FROM digital_holdings WHERE owner_id = ? AND granularity = 'release') AS digital_releases,
         (SELECT COUNT(*) FROM wants WHERE user_id = ?) AS wants,

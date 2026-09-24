@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { agentFor, setup } from "./helpers.js";
 import { addToCrate, createCrate, createDigital, createManualCopy, crateItems, moveCrateItem, removeFromCrate } from "../src/domain/library.js";
 import { addChartEntry, createChart, getOwnChart, moveChartEntry, removeChartEntry } from "../src/domain/charts.js";
-import { openDatabase, migrate } from "../src/db/index.js";
+import { openDatabase, migrate, migrateDown } from "../src/db/index.js";
+import { setup as fullSetup } from "./helpers.js";
 import { FakeClock } from "../src/lib/clock.js";
 
 function tracks(env: ReturnType<typeof setup>, n: number, extra: Record<string, unknown> = {}) {
@@ -142,5 +143,29 @@ describe("migrations", () => {
     expect(db.prepare("SELECT copy_id, position FROM crate_items ORDER BY position").all()).toEqual([{ copy_id: 1, position: 1 }, { copy_id: 2, position: 2 }]);
     expect(db.prepare("SELECT want_kind FROM wants").get()).toEqual({ want_kind: "edition" });
     expect(db.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("003 renames editions→releases and releases→masters without losing user data, and can be reversed", () => {
+    const env = fullSetup();
+    const db = env.db;
+    const counts = () => ({
+      copies: (db.prepare("SELECT COUNT(*) AS n FROM copies").get() as any).n,
+      linked: (db.prepare("SELECT COUNT(*) AS n FROM copies c JOIN releases r ON r.id = c.release_id").get() as any).n,
+      listings: (db.prepare("SELECT COUNT(*) AS n FROM listings").get() as any).n,
+      lines: (db.prepare("SELECT COUNT(*) AS n FROM order_lines").get() as any).n,
+      wants: (db.prepare("SELECT COUNT(*) AS n FROM wants").get() as any).n,
+    });
+    const before = counts();
+    const pressings = (db.prepare("SELECT COUNT(*) AS n FROM releases").get() as any).n;
+    expect(migrateDown(db)).toBe("003_catalog_foundation.sql");
+    expect((db.prepare("SELECT COUNT(*) AS n FROM editions").get() as any).n).toBe(pressings);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM copies c JOIN editions e ON e.id = c.edition_id").get() as any).n).toBe(before.linked);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    migrate(db);
+    expect(counts()).toEqual(before);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM catalog_search").get() as any).n).toBeGreaterThan(0);
+    // Once Discogs-imported data exists, reverting is refused instead of losing it.
+    db.prepare("INSERT INTO artists (name, sort_name, discogs_artist_id, created_at) VALUES ('X', 'X', 1, 'now')").run();
+    expect(() => migrateDown(db)).toThrow(/Refusing to revert/);
   });
 });

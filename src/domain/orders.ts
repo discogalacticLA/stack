@@ -183,12 +183,12 @@ export function checkout(db: DB, clock: Clock, reservationMinutes: number, buyer
         }
         const copy = db.prepare("SELECT copy_id FROM listings WHERE id = ?").get(item.id) as { copy_id: number };
         db.prepare(
-          `INSERT INTO order_lines (order_id, listing_id, listing_version, copy_id, edition_id, artist_snapshot, title_snapshot, label_snapshot,
+          `INSERT INTO order_lines (order_id, listing_id, listing_version, copy_id, release_id, artist_snapshot, title_snapshot, label_snapshot,
              catalog_number_snapshot, format_snapshot, country_snapshot, year_snapshot, media_condition_snapshot, sleeve_condition_snapshot,
              condition_description_snapshot, photo_ids_snapshot, price_cents, currency)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(orderId, item.id, item.version, copy.copy_id, item.edition_id, item.artist, item.title, item.label, item.catalog_number,
-          item.format, item.country, item.release_year, item.media_condition, item.sleeve_condition, item.condition_description,
+        ).run(orderId, item.id, item.version, copy.copy_id, item.release_id, item.artist, item.title, item.label, item.catalog_number,
+          item.format, item.country, item.year, item.media_condition, item.sleeve_condition, item.condition_description,
           JSON.stringify(item.photo_ids), item.price_cents, item.currency);
         removeFromCart(db, buyerId, item.id);
       }
@@ -340,10 +340,10 @@ export function addPurchaseToCollection(db: DB, clock: Clock, buyerId: number, l
     const copyId = Number(
       db
         .prepare(
-          `INSERT INTO copies (owner_id, edition_id, media_condition, sleeve_condition, acquired_on, acquired_from, acquisition_cost_cents,
+          `INSERT INTO copies (owner_id, release_id, media_condition, sleeve_condition, acquired_on, acquired_from, acquisition_cost_cents,
              acquisition_currency, date_added, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(buyerId, line.edition_id, line.media_condition_snapshot, line.sleeve_condition_snapshot, now.slice(0, 10),
+        .run(buyerId, line.release_id, line.media_condition_snapshot, line.sleeve_condition_snapshot, now.slice(0, 10),
           `Simulated order #${line.oid} from ${line.seller_name_snapshot}`, line.price_cents, line.currency, now, now, now).lastInsertRowid,
     );
     db.prepare("UPDATE order_lines SET buyer_copy_id = ? WHERE id = ?").run(copyId, lineId);

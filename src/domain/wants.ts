@@ -1,5 +1,5 @@
 /**
- * Wants: a desire for music in any acceptable format, a specific edition, or a specific
+ * Wants: a desire for music in any acceptable format, a specific release (pressing), or a specific
  * collectible configuration. Wants are never holdings; the wantlist is private.
  */
 import { z } from "zod";
@@ -8,24 +8,33 @@ import type { Clock } from "../lib/clock.js";
 import { iso } from "../lib/clock.js";
 import { notFound } from "../lib/errors.js";
 import { optionalInt, optionalText, parse, requiredText } from "../lib/validation.js";
-import { artistCredits } from "./catalog.js";
+import { creditForRelease, masterCredits } from "./catalog.js";
 import { FORMAT_GROUPS } from "./library.js";
 
 export const WANT_KIND_LABELS: Record<string, string> = {
   any_format: "Any format",
-  edition: "Specific edition",
+  edition: "Specific release (pressing)",
   configuration: "Specific configuration",
 };
 
-/** Adds a want linked to the archive (from a release or edition page). */
-export function addWant(db: DB, clock: Clock, userId: number, releaseId: number, editionId: number | null) {
-  if (editionId != null) {
-    const e = db.prepare("SELECT release_id FROM editions WHERE id = ?").get(editionId) as { release_id: number } | undefined;
-    if (!e || e.release_id !== releaseId) throw notFound("Edition");
-  } else if (!db.prepare("SELECT 1 FROM releases WHERE id = ?").get(releaseId)) throw notFound("Release");
+/**
+ * Adds a want linked to the catalog: a whole master (any version) or one specific release.
+ * `masterId` may be null for a release that has no master.
+ */
+export function addWant(db: DB, clock: Clock, userId: number, masterId: number | null, releaseId: number | null) {
+  if (releaseId != null) {
+    const e = db.prepare("SELECT master_id FROM releases WHERE id = ?").get(releaseId) as { master_id: number | null } | undefined;
+    if (!e || (masterId != null && e.master_id !== masterId)) throw notFound("Release");
+    masterId = e.master_id;
+  } else if (masterId == null || !db.prepare("SELECT 1 FROM masters WHERE id = ?").get(masterId)) throw notFound("Master");
   const now = iso(clock.now());
-  db.prepare("INSERT OR IGNORE INTO wants (user_id, want_kind, release_id, edition_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(
-    userId, editionId == null ? "any_format" : "edition", releaseId, editionId, now, now);
+  const exists = db.prepare("SELECT id FROM wants WHERE user_id = ? AND IFNULL(master_id, 0) = ? AND IFNULL(release_id, 0) = ? AND want_kind != 'configuration' AND source_entry_id IS NULL")
+    .get(userId, masterId ?? 0, releaseId ?? 0);
+  if (exists) return;
+  // Master-less release wants store descriptive text so the want stays meaningful on its own.
+  const r = releaseId != null && masterId == null ? (db.prepare("SELECT title FROM releases WHERE id = ?").get(releaseId) as { title: string }) : null;
+  db.prepare("INSERT INTO wants (user_id, want_kind, master_id, release_id, artist_text, title_text, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+    userId, releaseId == null ? "any_format" : "edition", masterId, releaseId, r ? creditForRelease(db, { id: releaseId!, master_id: null }) : null, r?.title ?? null, now, now);
 }
 
 export const manualWantSchema = z
@@ -65,10 +74,10 @@ export function removeWant(db: DB, userId: number, wantId: number) {
   db.prepare("DELETE FROM wants WHERE id = ? AND user_id = ?").run(wantId, userId);
 }
 
-export function hasWant(db: DB, userId: number, releaseId: number, editionId: number | null): number | null {
+export function hasWant(db: DB, userId: number, masterId: number | null, releaseId: number | null): number | null {
   const r = db
-    .prepare("SELECT id FROM wants WHERE user_id = ? AND release_id = ? AND IFNULL(edition_id, 0) = ? AND want_kind != 'configuration'")
-    .get(userId, releaseId, editionId ?? 0) as { id: number } | undefined;
+    .prepare("SELECT id FROM wants WHERE user_id = ? AND IFNULL(master_id, 0) = ? AND IFNULL(release_id, 0) = ? AND want_kind != 'configuration'")
+    .get(userId, masterId ?? 0, releaseId ?? 0) as { id: number } | undefined;
   return r?.id ?? null;
 }
 
@@ -82,20 +91,20 @@ export function listWants(db: DB, userId: number, opts: { q?: string } = {}) {
   }
   const rows = db
     .prepare(
-      `SELECT w.*, COALESCE(w.title_text, r.title) AS title, COALESCE(w.catno_text, e.catalog_number) AS catno, COALESCE(w.label_text, lb.name) AS label,
-         COALESCE(w.format_raw, e.format) AS format, COALESCE(w.release_year, e.release_year) AS year,
+      `SELECT w.*, COALESCE(w.title_text, e.title, r.title) AS title, COALESCE(w.catno_text, e.catalog_number) AS catno, COALESCE(w.label_text, lb.name) AS label,
+         COALESCE(w.format_raw, e.format) AS format, COALESCE(w.release_year, e.year) AS year,
          (SELECT json_extract(se.data, '$.release_id') FROM source_entries se WHERE se.id = w.source_entry_id) AS discogs_release_id,
-         CASE WHEN w.release_id IS NULL THEN NULL ELSE (SELECT COUNT(*) FROM listings li JOIN editions e2 ON e2.id = li.edition_id
+         CASE WHEN w.master_id IS NULL AND w.release_id IS NULL THEN NULL ELSE (SELECT COUNT(*) FROM listings li JOIN releases e2 ON e2.id = li.release_id
             WHERE li.status = 'available' AND li.seller_id != w.user_id
-              AND (CASE WHEN w.edition_id IS NULL THEN e2.release_id = w.release_id ELSE e2.id = w.edition_id END)) END AS for_sale,
-         CASE WHEN w.release_id IS NULL THEN NULL ELSE (SELECT MIN(li.price_cents) FROM listings li JOIN editions e2 ON e2.id = li.edition_id
+              AND (CASE WHEN w.release_id IS NULL THEN e2.master_id = w.master_id ELSE e2.id = w.release_id END)) END AS for_sale,
+         CASE WHEN w.master_id IS NULL AND w.release_id IS NULL THEN NULL ELSE (SELECT MIN(li.price_cents) FROM listings li JOIN releases e2 ON e2.id = li.release_id
             WHERE li.status = 'available' AND li.seller_id != w.user_id
-              AND (CASE WHEN w.edition_id IS NULL THEN e2.release_id = w.release_id ELSE e2.id = w.edition_id END)) END AS min_price
-       FROM wants w LEFT JOIN releases r ON r.id = w.release_id LEFT JOIN editions e ON e.id = w.edition_id LEFT JOIN labels lb ON lb.id = e.label_id
+              AND (CASE WHEN w.release_id IS NULL THEN e2.master_id = w.master_id ELSE e2.id = w.release_id END)) END AS min_price
+       FROM wants w LEFT JOIN masters r ON r.id = w.master_id LEFT JOIN releases e ON e.id = w.release_id LEFT JOIN labels lb ON lb.id = e.label_id
        WHERE w.user_id = ?${extra} ORDER BY w.id DESC`,
     )
     .all(...args) as any[];
-  const credits = artistCredits(db, [...new Set(rows.filter((r) => r.release_id).map((r) => r.release_id))]);
-  for (const r of rows) r.artist = r.artist_text ?? credits.get(r.release_id) ?? "Unknown artist";
+  const credits = masterCredits(db, rows.filter((r) => r.master_id).map((r) => r.master_id));
+  for (const r of rows) r.artist = r.artist_text ?? (r.master_id ? credits.get(r.master_id) : r.release_id ? creditForRelease(db, { id: r.release_id, master_id: null }) : null) ?? "Unknown artist";
   return rows;
 }

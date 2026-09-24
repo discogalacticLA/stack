@@ -62,7 +62,7 @@ export function registerSellingRoutes(app: Express, ctx: AppContext) {
       title: "Selling",
       nav: "selling",
       body: html`<h1>Selling</h1>
-        <p>To sell, open a copy in <a href="/collection">your collection</a> and choose “Sell this copy”, or open any edition and choose “Add to collection”, then “Add copy and list for sale”.</p>
+        <p>To sell, open a copy in <a href="/library">your library</a> and choose “Sell this copy”, or open any release and choose “Add to collection”, then “Add copy and list for sale”.</p>
         <p><a class="btn btn-quiet" href="/orders?role=seller">View simulated orders you've received</a></p>
         <h2>Your listings</h2>
         ${listings.length

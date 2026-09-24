@@ -50,7 +50,7 @@ export async function makeListing(env: TestEnv, owner: string, editionKey = "nb-
   const { createCopy, addCopyPhoto } = await import("../src/domain/library.js");
   const { createDraftListing, publishListing } = await import("../src/domain/listings.js");
   const uid = env.seed.users[owner];
-  const copyId = createCopy(env.db, env.clock, uid, env.seed.editions[editionKey], {
+  const copyId = createCopy(env.db, env.clock, uid, env.seed.releases[editionKey], {
     media_condition: "VG+", sleeve_condition: "VG", private_notes: "SECRET-NOTE-XYZ", storage_location: "SECRET-SHELF-42",
     acquisition_cost: "7.77", acquired_from: "SECRET-SOURCE", dj_bpm_notes: "SECRET-BPM", tags: "secret-tag",
   });

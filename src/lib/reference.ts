@@ -54,17 +54,19 @@ export const COUNTRIES: Record<string, { name: string; zone: string }> = {
 };
 export const COUNTRY_CODES = Object.keys(COUNTRIES);
 
+/** Catalog countries are display text ("UK", "Germany", "UK & Europe"); ISO codes (used for shipping) map to names. */
 export function countryName(code: string | null | undefined): string {
   if (!code) return "Unknown";
   return COUNTRIES[code]?.name ?? code;
 }
 
+/** Short keys accepted in contribution forms → canonical identifier type names (Discogs vocabulary). Any other type text is allowed too. */
 export const IDENTIFIER_KINDS: Record<string, string> = {
   barcode: "Barcode",
-  matrix_runout: "Matrix / runout",
-  label_code: "Label code",
-  rights_society: "Rights society",
-  other: "Other identifier",
+  matrix_runout: "Matrix / Runout",
+  label_code: "Label Code",
+  rights_society: "Rights Society",
+  other: "Other",
 };
 
 export const SOURCE_KINDS: Record<string, string> = {

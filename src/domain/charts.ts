@@ -72,7 +72,7 @@ export function getOwnChart(db: DB, ownerId: number, chartId: number) {
   if (!c) throw notFound("Chart");
   c.entries = db
     .prepare(
-      `SELECT ce.*, li.item_type, li.item_id, li.artist, li.title, li.version, li.format_group, li.format_raw, li.year, li.edition_id,
+      `SELECT ce.*, li.item_type, li.item_id, li.artist, li.title, li.version, li.format_group, li.format_raw, li.year, li.release_id,
          d.play_count, d.granularity
        FROM chart_entries ce
        JOIN library_items li ON (li.item_type = 'physical' AND li.item_id = ce.copy_id) OR (li.item_type = 'digital' AND li.item_id = ce.digital_id)

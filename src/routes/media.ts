@@ -4,7 +4,7 @@ import type { AppContext } from "../context.js";
 import { notFound } from "../lib/errors.js";
 import { archiveArtSvg, copyPhotoSvg } from "../lib/placeholderArt.js";
 import { resolveUpload } from "../lib/uploads.js";
-import { artistCredit } from "../domain/catalog.js";
+import { creditForRelease } from "../domain/catalog.js";
 import { idParam } from "./helpers.js";
 
 const MIME: Record<string, string> = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" };
@@ -28,12 +28,11 @@ export function registerMediaRoutes(app: Express, ctx: AppContext) {
   // Archive images are public.
   app.get("/media/archive/:id", (req, res) => {
     const img = ctx.db
-      .prepare("SELECT ai.*, e.release_id, e.catalog_number FROM archive_images ai JOIN editions e ON e.id = ai.edition_id WHERE ai.id = ?")
+      .prepare("SELECT ai.*, e.master_id, e.title, e.catalog_number FROM archive_images ai JOIN releases e ON e.id = ai.release_id WHERE ai.id = ?")
       .get(idParam(req)) as any;
     if (!img) throw notFound("Image");
     if (img.storage_path) return sendUpload(res, ctx.config.uploadDir, img.storage_path);
-    const title = (ctx.db.prepare("SELECT title FROM releases WHERE id = ?").get(img.release_id) as { title: string }).title;
-    sendSvg(res, archiveArtSvg(img.placeholder_seed ?? String(img.id), title, artistCredit(ctx.db, img.release_id)), "public");
+    sendSvg(res, archiveArtSvg(img.placeholder_seed ?? String(img.id), img.title, creditForRelease(ctx.db, { id: img.release_id, master_id: img.master_id })), "public");
   });
 
   // Copy photos are private unless shown on a public listing or part of the viewer's order.

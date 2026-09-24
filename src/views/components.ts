@@ -75,10 +75,10 @@ function described(o: FieldOpts) {
   return attrs({ "aria-describedby": ids || null, "aria-invalid": o.errors?.[o.name] ? "true" : null, required: o.required ?? null });
 }
 
-export function textField(o: FieldOpts & { value?: unknown; type?: string; placeholder?: string; inputmode?: string; autocomplete?: string }) {
+export function textField(o: FieldOpts & { value?: unknown; type?: string; placeholder?: string; inputmode?: string; autocomplete?: string; list?: string }) {
   return wrap(
     o,
-    html`<input id="f-${o.name}" name="${o.name}" type="${o.type ?? "text"}" value="${o.value ?? ""}"${attrs({ placeholder: o.placeholder, inputmode: o.inputmode, autocomplete: o.autocomplete })}${described(o)}>`,
+    html`<input id="f-${o.name}" name="${o.name}" type="${o.type ?? "text"}" value="${o.value ?? ""}"${attrs({ placeholder: o.placeholder, inputmode: o.inputmode, autocomplete: o.autocomplete, list: o.list })}${described(o)}>`,
   );
 }
 

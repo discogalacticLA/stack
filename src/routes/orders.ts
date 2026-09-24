@@ -199,7 +199,7 @@ export function registerOrderRoutes(app: Express, ctx: AppContext) {
           <div class="grow"><strong>${l.artist_snapshot} — ${l.title_snapshot}</strong><br>
             <span class="catno">${l.catalog_number_snapshot ?? "—"}</span> · ${l.label_snapshot ?? "label unknown"} · ${l.format_snapshot} · ${countryName(l.country_snapshot)} · ${l.year_snapshot ?? "?"}<br>
             Media ${grade(l.media_condition_snapshot)} · Sleeve ${grade(l.sleeve_condition_snapshot)} — <span class="small">${l.condition_description_snapshot}</span>
-            <br><a class="small" href="/editions/${l.edition_id}">Current archive entry</a></div>
+            <br><a class="small" href="/releases/${l.release_id}">Current catalog entry</a></div>
           <strong>${money(l.price_cents, l.currency)}</strong>
           ${o.role === "buyer" && o.status === "delivered"
             ? l.buyer_copy_id

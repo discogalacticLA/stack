@@ -7,7 +7,7 @@ import { DEMO_CURRENCY } from "../lib/money.js";
 import { COUNTRY_CODES, MEDIA_CODES, SLEEVE_CODES, conditionRank } from "../lib/reference.js";
 import { quoteShipping, type ShippingProfile, type ShippingQuote } from "../lib/shipping.js";
 import { asIdArray, moneyField, parse, requiredText } from "../lib/validation.js";
-import { artistCredit } from "./catalog.js";
+import { creditForRelease } from "./catalog.js";
 import { getOwnCopy } from "./library.js";
 
 export const ACTIVE_LISTING_STATUSES = ["draft", "available", "reserved", "sold"] as const;
@@ -43,8 +43,8 @@ export function createDraftListing(db: DB, clock: Clock, sellerId: number, copyI
   const input = parse(listingSchema, raw);
   return db.transaction(() => {
     const copy = getOwnCopy(db, sellerId, copyId);
-    // Listings must describe a real physical copy of a known archive edition (never a digital file).
-    if (copy.edition_id == null) throw new DomainError("Link this copy to an archive edition before listing it, so buyers know exactly which pressing it is.", 422);
+    // Listings must describe a real physical copy of a known catalog release (never a digital file).
+    if (copy.release_id == null) throw new DomainError("Link this copy to a catalog release before listing it, so buyers know exactly which pressing it is.", 422);
     validateOwnedRefs(db, sellerId, copyId, input.shipping_profile_id, input.photo_ids);
     const existing = db
       .prepare(`SELECT id, status FROM listings WHERE copy_id = ? AND status IN (${ACTIVE_LISTING_STATUSES.map(() => "?").join(",")})`)
@@ -56,11 +56,11 @@ export function createDraftListing(db: DB, clock: Clock, sellerId: number, copyI
       id = Number(
         db
           .prepare(
-            `INSERT INTO listings (copy_id, seller_id, edition_id, price_cents, currency, media_condition, sleeve_condition, condition_description,
+            `INSERT INTO listings (copy_id, seller_id, release_id, price_cents, currency, media_condition, sleeve_condition, condition_description,
                shipping_profile_id, status, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
           )
-          .run(copyId, sellerId, copy.edition_id, input.price, DEMO_CURRENCY, input.media_condition, input.sleeve_condition,
+          .run(copyId, sellerId, copy.release_id, input.price, DEMO_CURRENCY, input.media_condition, input.sleeve_condition,
             input.condition_description, input.shipping_profile_id, now, now).lastInsertRowid,
       );
     } catch (e: any) {
@@ -178,15 +178,15 @@ export function listShippingProfiles(db: DB, sellerId: number): ShippingProfile[
 export interface PublicListing {
   id: number;
   status: string;
-  edition_id: number;
-  release_id: number;
+  release_id: number;          // the catalog release (pressing) this copy is
+  master_id: number | null;
   artist: string;
   title: string;
   label: string | null;
   catalog_number: string | null;
   format: string;
   country: string | null;
-  release_year: number | null;
+  year: number | null;
   price_cents: number;
   currency: string;
   media_condition: string;
@@ -202,11 +202,11 @@ export interface PublicListing {
 export function getPublicListing(db: DB, listingId: number): PublicListing | null {
   const l = db
     .prepare(
-      `SELECT li.id, li.status, li.edition_id, li.price_cents, li.currency, li.media_condition, li.sleeve_condition,
+      `SELECT li.id, li.status, li.release_id, li.price_cents, li.currency, li.media_condition, li.sleeve_condition,
          li.condition_description, li.shipping_profile_id, li.seller_id, li.version, li.published_at,
-         e.release_id, e.catalog_number, e.format, e.format_details, e.country, e.release_year, lb.name AS label, r.title,
+         e.master_id, e.catalog_number, e.format, e.format_details, e.country, e.year, lb.name AS label, e.title,
          u.display_name AS seller_name, u.country AS seller_country, u.created_at AS seller_since
-       FROM listings li JOIN editions e ON e.id = li.edition_id JOIN releases r ON r.id = e.release_id
+       FROM listings li JOIN releases e ON e.id = li.release_id
        LEFT JOIN labels lb ON lb.id = e.label_id JOIN users u ON u.id = li.seller_id
        WHERE li.id = ? AND li.status IN ('available', 'reserved', 'sold')`,
     )
@@ -224,15 +224,15 @@ export function getPublicListing(db: DB, listingId: number): PublicListing | nul
   return {
     id: l.id,
     status: l.status,
-    edition_id: l.edition_id,
     release_id: l.release_id,
-    artist: artistCredit(db, l.release_id),
+    master_id: l.master_id,
+    artist: creditForRelease(db, { id: l.release_id, master_id: l.master_id }),
     title: l.title,
     label: l.label,
     catalog_number: l.catalog_number,
     format: [l.format, l.format_details].filter(Boolean).join(", "),
     country: l.country,
-    release_year: l.release_year,
+    year: l.year,
     price_cents: l.price_cents,
     currency: l.currency,
     media_condition: l.media_condition,
@@ -253,11 +253,11 @@ export interface ListingOffer extends PublicListing {
 
 export type OfferSort = "total" | "price" | "condition";
 
-/** Available copies of an edition, with a delivered total when shipping can be calculated. */
-export function offersForEdition(db: DB, editionId: number, destination: string | null, sort: OfferSort = "total"): ListingOffer[] {
+/** Available copies of a release, with a delivered total when shipping can be calculated. */
+export function offersForRelease(db: DB, releaseId: number, destination: string | null, sort: OfferSort = "total"): ListingOffer[] {
   const ids = db
-    .prepare("SELECT id FROM listings WHERE edition_id = ? AND status = 'available'")
-    .all(editionId)
+    .prepare("SELECT id FROM listings WHERE release_id = ? AND status = 'available'")
+    .all(releaseId)
     .map((r: any) => r.id as number);
   const offers = ids.map((id) => {
     const l = getPublicListing(db, id)!;
@@ -275,8 +275,8 @@ export function offersForEdition(db: DB, editionId: number, destination: string 
 export function listSellerListings(db: DB, sellerId: number) {
   return db
     .prepare(
-      `SELECT li.id, li.status, li.price_cents, li.currency, li.copy_id, li.edition_id, li.updated_at, r.title, e.catalog_number
-       FROM listings li JOIN editions e ON e.id = li.edition_id JOIN releases r ON r.id = e.release_id
+      `SELECT li.id, li.status, li.price_cents, li.currency, li.copy_id, li.release_id, li.updated_at, e.title, e.catalog_number
+       FROM listings li JOIN releases e ON e.id = li.release_id
        WHERE li.seller_id = ? ORDER BY CASE li.status WHEN 'available' THEN 0 WHEN 'reserved' THEN 1 WHEN 'draft' THEN 2 WHEN 'sold' THEN 3 ELSE 4 END, li.id DESC`,
     )
     .all(sellerId) as any[];

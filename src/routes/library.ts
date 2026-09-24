@@ -7,10 +7,10 @@ import { centsToInput } from "../lib/money.js";
 import { countryName, MEDIA_CONDITIONS, SLEEVE_CONDITIONS } from "../lib/reference.js";
 import { saveImages } from "../lib/uploads.js";
 import { ValidationError, type FieldErrors } from "../lib/validation.js";
-import { artistCredit, getEditionSummary } from "../domain/catalog.js";
+import { creditForRelease, getReleaseSummary } from "../domain/catalog.js";
 import {
   addCopyPhoto, addToCrate, applyBulkAction, bulkRequestFromBody, createCopy, createDigital, createManualCopy, deleteCopyPhoto, describeBulkAction,
-  filterQuery, FORMAT_GROUPS, getOwnCopy, getOwnDigital, getPref, GROUP_LABELS, groupCounts, libraryCounts, libraryFacets, linkCopyToEdition,
+  filterQuery, FORMAT_GROUPS, getOwnCopy, getOwnDigital, getPref, GROUP_LABELS, groupCounts, libraryCounts, libraryFacets, linkCopyToRelease,
   listCrates, listLibrary, listTags, parseBulkAction, parseLibraryFilters, parseRef, parseRefs, refKey, relatedHoldings, removeFromCrate,
   resolveBulkScope, setPref, SORT_LABELS, SUGGESTED_TAGS, updateCopy, updateDigital, type ItemRef, type LibraryFilters, type LibraryGroup, type LibrarySort,
 } from "../domain/library.js";
@@ -23,7 +23,7 @@ const DEFAULT_PREFS: ViewPrefs = { view: "grid", sort: "artist", dir: "asc", gro
 
 export const itemHref = (r: { item_type: string; item_id: number }) => (r.item_type === "physical" ? `/copies/${r.item_id}` : `/digital/${r.item_id}`);
 
-/** Artwork only when it legitimately exists (archive image of a linked edition); otherwise an honest placeholder. */
+/** Artwork only when it legitimately exists (catalog image of a linked release); otherwise an honest placeholder. */
 export function itemArt(r: any, size: "sm" | "md" = "md") {
   if (r.image_id) return cover(r.image_id, `${r.artist} – ${r.title}`, { size });
   return html`<div class="cover cover-${size} cover-missing" role="img" aria-label="No artwork for ${r.title}"><span>${r.format_group === "Digital" ? "Digital" : r.format_group ?? ""}<br>no artwork</span></div>`;
@@ -41,14 +41,14 @@ function itemLine(r: any): SafeHtml {
 
 const conditionOpts = (list: readonly { code: string; label: string }[]) => list.map((c) => ({ value: c.code, label: c.label }));
 
-function physicalForm(req: Request, ctx: AppContext, o: { action: string; values: Record<string, any>; errors?: FieldErrors; submit: string; editionId?: number; descriptive: boolean; allowSellNext?: boolean }) {
+function physicalForm(req: Request, ctx: AppContext, o: { action: string; values: Record<string, any>; errors?: FieldErrors; submit: string; releaseId?: number; descriptive: boolean; allowSellNext?: boolean }) {
   const user = me(req);
   const crates = listCrates(ctx.db, user.id);
   const tags = listTags(ctx.db, user.id);
   const v = o.values;
   return html`<form method="post" action="${o.action}" class="form-narrow" novalidate>
     ${csrf(req)}${errorSummary(o.errors)}
-    ${o.editionId ? html`<input type="hidden" name="edition_id" value="${o.editionId}">` : ""}
+    ${o.releaseId ? html`<input type="hidden" name="release_id" value="${o.releaseId}">` : ""}
     ${o.descriptive ? html`<fieldset><legend>What is it? <span class="private-label">Private</span></legend>
         <p class="hint">Only you see these details. They don't create or change any archive entry.</p>
         <div class="grid-2">
@@ -69,7 +69,7 @@ function physicalForm(req: Request, ctx: AppContext, o: { action: string; values
     </fieldset>
     <fieldset><legend>Organize <span class="private-label">Private</span></legend>
       <p class="hint">Tags, crates and DJ notes are personal. They never change shared archive genres or styles.</p>
-      ${o.editionId || o.descriptive ? selectField({ label: "Add to crate", name: "crate_id", value: v.crate_id ?? "", options: crates.map((c) => ({ value: String(c.id), label: c.name })), blank: "No crate", errors: o.errors }) : ""}
+      ${o.releaseId || o.descriptive ? selectField({ label: "Add to crate", name: "crate_id", value: v.crate_id ?? "", options: crates.map((c) => ({ value: String(c.id), label: c.name })), blank: "No crate", errors: o.errors }) : ""}
       ${textField({ label: "Personal tags", name: "tags", value: v.tags, errors: o.errors, hint: `Comma-separated. Ideas: ${SUGGESTED_TAGS.join(", ")}${tags.length ? `. Yours: ${tags.map((t) => t.name).join(", ")}` : ""}` })}
       <div class="grid-2">
         ${selectField({ label: "Energy", name: "dj_energy", value: v.dj_energy ?? "", options: [1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `${n} — ${["low", "gentle", "mid", "high", "peak"][n - 1]}` })), blank: "Not set", errors: o.errors })}
@@ -271,7 +271,7 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
         <div class="toolbar"><div class="left"><h1>Library</h1></div>
           <div class="right"><a class="btn btn-sm" href="/imports">Import</a><a class="btn btn-quiet btn-sm" href="/copies/new">+ Record</a><a class="btn btn-quiet btn-sm" href="/digital/new">+ Digital</a><a class="btn btn-quiet btn-sm" href="/wants">Wantlist (${counts.wants})</a></div></div>
         <p class="counts small" aria-label="Library counts">
-          <strong>${counts.physical_copies}</strong> physical cop${counts.physical_copies === 1 ? "y" : "ies"} (${counts.physical_editions} archive edition${counts.physical_editions === 1 ? "" : "s"} linked, ${counts.physical_unresolved} not linked) ·
+          <strong>${counts.physical_copies}</strong> physical cop${counts.physical_copies === 1 ? "y" : "ies"} (${counts.physical_releases} catalog release${counts.physical_releases === 1 ? "" : "s"} linked, ${counts.physical_unresolved} not linked) ·
           <strong>${counts.digital_tracks}</strong> digital track${counts.digital_tracks === 1 ? "" : "s"} · <strong>${counts.digital_releases}</strong> digital release${counts.digital_releases === 1 ? "" : "s"} ·
           <strong>${counts.releases_linked}</strong> archive release${counts.releases_linked === 1 ? "" : "s"} represented · wants are kept separately (<a href="/wants">${counts.wants}</a>)</p>
         <form method="get" action="/library" class="panel library-controls" role="search">
@@ -286,7 +286,7 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
             <div class="field"><label for="f-crate">Crate</label><select id="f-crate" name="crate">${option("", "Any", f.crate)}${crates.map((c) => option(String(c.id), `${c.name} (${c.n})`, f.crate))}</select></div>
             <div class="field"><label for="f-folder">Imported folder / playlist</label><select id="f-folder" name="folder">${option("", "Any", f.folder)}
               ${facets.folders.map((x) => option(x, `Discogs: ${x}`, f.folder))}${facets.playlists.map((p) => option(`pl:${p.id}`, `Rekordbox: ${p.path}`, f.folder))}</select></div>
-            <div class="field"><label for="f-resolved">Archive link</label><select id="f-resolved" name="resolved">${option("", "Any", f.resolved)}${option("yes", "Linked to an archive edition", f.resolved)}${option("no", "Not linked", f.resolved)}</select></div>
+            <div class="field"><label for="f-resolved">Catalog link</label><select id="f-resolved" name="resolved">${option("", "Any", f.resolved)}${option("yes", "Linked to a catalog release", f.resolved)}${option("no", "Not linked", f.resolved)}</select></div>
           </div>
           ${f.batch ? html`<input type="hidden" name="batch" value="${f.batch}">` : ""}
           <div class="toolbar">
@@ -390,7 +390,7 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
   app.get("/copies/new", (req, res) => {
     me(req);
     page(req, res, { title: "Add a record", nav: "library", body: html`<h1>Add a record manually</h1>
-      <p class="muted">For records not in the archive (or when you'd rather not look them up). It stays private. You can link it to an archive edition later. To add a known archive edition instead, find it in the <a href="/discover">archive</a> and choose “Add to collection”.</p>
+      <p class="muted">For records not in the archive (or when you'd rather not look them up). It stays private. You can link it to a catalog release later. To add a known catalog release instead, find it in <a href="/discover">archive</a> and choose “Add to collection”.</p>
       ${physicalForm(req, ctx, { action: "/copies/new", values: { media_condition: "", sleeve_condition: "" }, submit: "Add record", descriptive: true })}` });
   });
 
@@ -406,38 +406,38 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
     }
   });
 
-  const renderAddFromEdition = (req: Request, res: Response, editionId: number, values: Record<string, any>, errors?: FieldErrors) => {
-    const e = getEditionSummary(ctx.db, editionId)!;
-    const title = (ctx.db.prepare("SELECT title FROM releases WHERE id = ?").get(e.release_id) as any).title;
+  const renderAddFromRelease = (req: Request, res: Response, releaseId: number, values: Record<string, any>, errors?: FieldErrors) => {
+    const e = getReleaseSummary(ctx.db, releaseId)!;
+    const title = e.title;
     page(req, res, {
       title: "Add a copy",
       nav: "library",
       body: html`<h1>Add a copy to your library</h1>
-        <p class="panel"><strong>${artistCredit(ctx.db, e.release_id)} — ${title}</strong><br><span class="catno">${e.catalog_number ?? "no cat. no."}</span> · ${e.label ?? "label unknown"} · ${e.format} ${e.format_details ?? ""} · ${countryName(e.country)} · ${e.release_year ?? "year unknown"}
-        <br><a class="small" href="/editions/${e.id}">Not this edition? Check the edition details</a></p>
+        <p class="panel"><strong>${creditForRelease(ctx.db, e)} — ${title}</strong><br><span class="catno">${e.catalog_number ?? "no cat. no."}</span> · ${e.label ?? "label unknown"} · ${e.format} ${e.format_details ?? ""} · ${countryName(e.country)} · ${e.year ?? "year unknown"}
+        <br><a class="small" href="/releases/${e.id}">Not this pressing? Check the release details</a></p>
         <p class="muted">Your copy is <strong>private</strong> and <strong>not for sale</strong> unless you create a listing.</p>
-        ${physicalForm(req, ctx, { action: "/collection/add", values, errors, submit: "Add copy", editionId: e.id, descriptive: false, allowSellNext: true })}`,
+        ${physicalForm(req, ctx, { action: "/collection/add", values, errors, submit: "Add copy", releaseId: e.id, descriptive: false, allowSellNext: true })}`,
     }, errors ? 422 : 200);
   };
 
   app.get("/collection/add", (req, res) => {
     me(req);
-    const e = getEditionSummary(ctx.db, Number(req.query.edition_id));
-    if (!e) return page(req, res, { title: "Add a copy", nav: "library", body: html`<div class="empty"><h1>Choose an edition first</h1><p>Find the edition in the <a href="/discover">archive</a>, or <a href="/copies/new">add a record manually</a>.</p></div>` });
-    renderAddFromEdition(req, res, e.id, { media_condition: "", sleeve_condition: "" });
+    const e = getReleaseSummary(ctx.db, Number(req.query.release_id ?? req.query.edition_id));
+    if (!e) return page(req, res, { title: "Add a copy", nav: "library", body: html`<div class="empty"><h1>Choose a release first</h1><p>Find the release in <a href="/discover">Discover</a>, or <a href="/copies/new">add a record manually</a>.</p></div>` });
+    renderAddFromRelease(req, res, e.id, { media_condition: "", sleeve_condition: "" });
   });
 
   app.post("/collection/add", (req, res) => {
     const user = me(req);
-    const editionId = Number(req.body.edition_id);
-    if (!getEditionSummary(ctx.db, editionId)) throw new DomainError("Edition not found.", 404);
+    const releaseId = Number(req.body.release_id ?? req.body.edition_id);
+    if (!getReleaseSummary(ctx.db, releaseId)) throw new DomainError("Release not found.", 404);
     try {
-      const id = createCopy(ctx.db, ctx.clock, user.id, editionId, req.body);
+      const id = createCopy(ctx.db, ctx.clock, user.id, releaseId, req.body);
       addFlash(req, "success", "Copy added to your library (private).");
       res.redirect(303, req.body.next === "sell" ? `/copies/${id}/sell` : `/copies/${id}`);
     } catch (e) {
-      if (e instanceof ValidationError) return renderAddFromEdition(req, res, editionId, req.body, e.fields);
-      if (e instanceof DomainError && e.status === 422) return renderAddFromEdition(req, res, editionId, req.body, { crate_id: e.message });
+      if (e instanceof ValidationError) return renderAddFromRelease(req, res, releaseId, req.body, e.fields);
+      if (e instanceof DomainError && e.status === 422) return renderAddFromRelease(req, res, releaseId, req.body, { crate_id: e.message });
       throw e;
     }
   });
@@ -446,9 +446,9 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
     const user = me(req);
     const c = getOwnCopy(ctx.db, user.id, idParam(req));
     const ref: ItemRef = { type: "physical", id: c.id };
-    const suggestions = c.edition_id == null
+    const suggestions = c.release_id == null
       ? (ctx.db.prepare(
-          `SELECT e.id, e.catalog_number, e.format, e.country, e.release_year, r.title FROM editions e JOIN releases r ON r.id = e.release_id
+          `SELECT e.id, e.catalog_number, e.format, e.country, e.year AS release_year, e.title FROM releases e
            WHERE (e.catalog_number_norm IS NOT NULL AND e.catalog_number_norm = ?) OR r.title = ? COLLATE NOCASE LIMIT 8`,
         ).all(String(c.catno_text ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "") || "~", c.title_text ?? "~") as any[])
       : [];
@@ -460,12 +460,12 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
         <h1>${c.title}</h1>
         <p class="lead"><strong>${c.artist}</strong></p>
         <p>${html`<span class="badge kind-physical">${c.display_format_group}</span>`} ${c.display_format_raw ?? ""} ${c.label ? ` · ${c.label}` : ""}${c.catno ? html` · <span class="catno">${c.catno}</span>` : ""}${c.year ? ` · ${c.year}` : ""}</p>
-        ${c.edition_id
-          ? html`<p class="small">Linked to archive edition <a href="/editions/${c.edition_id}"><span class="catno">${c.catalog_number ?? "no cat. no."}</span> (${c.format} ${c.format_details ?? ""}, ${countryName(c.country)})</a>. ${c.genre ? html`Archive genre: ${c.genre}.` : ""}</p>`
-          : html`<p class="small uncertain">Not linked to an archive edition. The details above are your own private record${c.source ? " from your import" : ""}.</p>`}
+        ${c.release_id
+          ? html`<p class="small">Linked to catalog release <a href="/releases/${c.release_id}"><span class="catno">${c.catalog_number ?? "no cat. no."}</span> (${c.format} ${c.format_details ?? ""}, ${countryName(c.country)})</a>. ${c.genre ? html`Archive genre: ${c.genre}.` : ""}</p>`
+          : html`<p class="small uncertain">Not linked to a catalog release. The details above are your own private record${c.source ? " from your import" : ""}.</p>`}
         <div class="detail">
           <div>
-            ${c.edition_id ? itemArt({ ...c, image_id: (ctx.db.prepare("SELECT id FROM archive_images WHERE edition_id = ? ORDER BY kind = 'front' DESC, id LIMIT 1").get(c.edition_id) as any)?.id, format_group: c.display_format_group }) : itemArt({ ...c, format_group: c.display_format_group })}
+            ${c.release_id ? itemArt({ ...c, image_id: (ctx.db.prepare("SELECT id FROM archive_images WHERE release_id = ? ORDER BY kind = 'front' DESC, id LIMIT 1").get(c.release_id) as any)?.id, format_group: c.display_format_group }) : itemArt({ ...c, format_group: c.display_format_group })}
             <h2>Photos of this copy</h2>
             <p class="muted small">Actual-copy photos stay private unless you attach them to a published listing.</p>
             <div class="photo-row">${c.photos.map((p: any) => html`<div>${copyPhoto(p.id, c.title, "sm")}<form method="post" action="/copy-photos/${p.id}/delete">${csrf(req)}<button class="btn btn-quiet btn-sm" type="submit">Remove</button></form></div>`)}</div>
@@ -485,16 +485,16 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
             ${crateAdder(req, ctx, ref, c.crates)}
             ${relatedPanel(ctx, user.id, ref)}
             ${sourcePanel(c.source)}
-            ${suggestions.length ? html`<div class="panel"><h3>Link to an archive edition?</h3>
+            ${suggestions.length ? html`<div class="panel"><h3>Link to a catalog release?</h3>
               <p class="small muted">Possible matches by catalog number or title. Only link if you've checked it's the same pressing.</p>
-              ${suggestions.map((s) => html`<form method="post" action="/copies/${c.id}/link-edition" class="cart-line">${csrf(req)}<input type="hidden" name="edition_id" value="${s.id}">
-                <span class="grow"><a href="/editions/${s.id}">${s.title} <span class="catno">${s.catalog_number ?? "—"}</span></a> ${s.format} · ${countryName(s.country)} · ${s.release_year ?? "?"}</span>
+              ${suggestions.map((s) => html`<form method="post" action="/copies/${c.id}/link-release" class="cart-line">${csrf(req)}<input type="hidden" name="release_id" value="${s.id}">
+                <span class="grow"><a href="/releases/${s.id}">${s.title} <span class="catno">${s.catalog_number ?? "—"}</span></a> ${s.format} · ${countryName(s.country)} · ${s.release_year ?? "?"}</span>
                 <button class="btn btn-quiet btn-sm" type="submit">Link</button></form>`)}</div>` : ""}
             <div class="action-row">
               <a class="btn btn-quiet" href="/copies/${c.id}/edit">Edit</a>
               ${c.listing ? html`<a class="btn" href="/selling/listings/${c.listing.id}">Listing #${c.listing.id}: ${statusBadge(c.listing.status)}</a>`
-                : c.edition_id ? html`<a class="btn btn-quiet" href="/copies/${c.id}/sell">Sell this copy</a>`
-                : html`<span class="muted small">Link to an archive edition to be able to sell this copy.</span>`}
+                : c.release_id ? html`<a class="btn btn-quiet" href="/copies/${c.id}/sell">Sell this copy</a>`
+                : html`<span class="muted small">Link to a catalog release to be able to sell this copy.</span>`}
             </div>
           </div>
         </div>`,
@@ -509,17 +509,17 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
     res.redirect(303, `/copies/${c.id}`);
   });
 
-  app.post("/copies/:id/link-edition", (req, res) => {
+  app.post(["/copies/:id/link-release", "/copies/:id/link-edition"], (req, res) => {
     const user = me(req);
-    linkCopyToEdition(ctx.db, ctx.clock, user.id, idParam(req), Number(req.body.edition_id));
-    addFlash(req, "success", "Linked to the archive edition. Your own notes, tags and imported details are unchanged.");
+    linkCopyToRelease(ctx.db, ctx.clock, user.id, idParam(req), Number(req.body.release_id ?? req.body.edition_id));
+    addFlash(req, "success", "Linked to the catalog release. Your own notes, tags and imported details are unchanged.");
     res.redirect(303, `/copies/${req.params.id}`);
   });
 
   app.get("/copies/:id/edit", (req, res) => {
     const user = me(req);
     const c = getOwnCopy(ctx.db, user.id, idParam(req));
-    page(req, res, { title: "Edit", nav: "library", body: html`<h1>Edit · ${c.title}</h1>${physicalForm(req, ctx, { action: `/copies/${c.id}/edit`, values: copyValues(c), submit: "Save", descriptive: c.edition_id == null })}` });
+    page(req, res, { title: "Edit", nav: "library", body: html`<h1>Edit · ${c.title}</h1>${physicalForm(req, ctx, { action: `/copies/${c.id}/edit`, values: copyValues(c), submit: "Save", descriptive: c.release_id == null })}` });
   });
 
   app.post("/copies/:id/edit", (req, res) => {
@@ -531,7 +531,7 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
       res.redirect(303, `/copies/${c.id}`);
     } catch (e) {
       if (!(e instanceof ValidationError)) throw e;
-      page(req, res, { title: "Edit", nav: "library", body: html`<h1>Edit · ${c.title}</h1>${physicalForm(req, ctx, { action: `/copies/${c.id}/edit`, values: req.body, errors: e.fields, submit: "Save", descriptive: c.edition_id == null })}` }, 422);
+      page(req, res, { title: "Edit", nav: "library", body: html`<h1>Edit · ${c.title}</h1>${physicalForm(req, ctx, { action: `/copies/${c.id}/edit`, values: req.body, errors: e.fields, submit: "Save", descriptive: c.release_id == null })}` }, 422);
     }
   });
 
@@ -675,19 +675,19 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
         ${wants.length
           ? html`<div class="table-wrap"><table class="compact"><thead><tr><th>Want</th><th>Kind</th><th class="hide-sm">Details</th><th>Market</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>
             ${wants.map((w) => html`<tr>
-              <td><strong>${w.artist}</strong> — ${w.release_id ? html`<a href="${w.edition_id ? `/editions/${w.edition_id}` : `/releases/${w.release_id}`}">${w.title}</a>` : w.title}
+              <td><strong>${w.artist}</strong> — ${w.release_id || w.master_id ? html`<a href="${w.release_id ? `/releases/${w.release_id}` : `/masters/${w.master_id}`}">${w.title}</a>` : w.title}
                 ${w.source_entry_id ? html`<br><span class="muted small">Imported${w.discogs_release_id ? html` · <a href="https://www.discogs.com/release/${w.discogs_release_id}" rel="noopener noreferrer external" target="_blank">Discogs ${w.discogs_release_id} ↗</a>` : ""}</span>` : ""}</td>
               <td>${WANT_KIND_LABELS[w.want_kind]}${w.configuration_note ? html`<br><span class="small">${w.configuration_note}</span>` : ""}</td>
               <td class="hide-sm small">${[w.label, w.catno, w.format, w.year].filter(Boolean).join(" · ") || "—"}
                 <form method="post" action="/wants/${w.id}/note" class="searchbar">${csrf(req)}<label for="f-wn-${w.id}" class="sr-only">Private note</label><input id="f-wn-${w.id}" name="note" value="${w.note ?? ""}" placeholder="Private note"><button class="btn btn-quiet btn-sm" type="submit">Save</button></form></td>
-              <td>${w.for_sale == null ? html`<span class="muted small">Not linked to the archive</span>` : w.for_sale ? html`<a class="forsale" href="${w.edition_id ? `/editions/${w.edition_id}/offers` : `/releases/${w.release_id}#editions`}">${w.for_sale} for sale from ${money(w.min_price)}</a>` : html`<span class="archive-only">None for sale</span>`}</td>
+              <td>${w.for_sale == null ? html`<span class="muted small">Not linked to the archive</span>` : w.for_sale ? html`<a class="forsale" href="${w.release_id ? `/releases/${w.release_id}/offers` : `/masters/${w.release_id}#editions`}">${w.for_sale} for sale from ${money(w.min_price)}</a>` : html`<span class="archive-only">None for sale</span>`}</td>
               <td><form method="post" action="/wants/${w.id}/remove">${csrf(req)}<button class="btn btn-quiet btn-sm" type="submit">Remove</button></form></td></tr>`)}
           </tbody></table></div>`
           : html`<div class="empty"><h2>${q ? "No wants match" : "No wants yet"}</h2><p>Add one below, use “Want” on an archive page, or import a Discogs wantlist.</p></div>`}
         <h2>Add a want</h2>
         <form method="post" action="/wants/manual" class="form-narrow panel" novalidate>${csrf(req)}${errorSummary(errors)}
           ${selectField({ label: "What do you want?", name: "want_kind", value: values.want_kind, options: [
-            { value: "any_format", label: "This music, any acceptable format" }, { value: "edition", label: "A specific edition" }, { value: "configuration", label: "A specific collectible configuration" }], errors, required: true })}
+            { value: "any_format", label: "This music, any acceptable format" }, { value: "edition", label: "A specific release (pressing)" }, { value: "configuration", label: "A specific collectible configuration" }], errors, required: true })}
           <div class="grid-2">
             ${textField({ label: "Artist", name: "artist_text", value: values.artist_text, errors, required: true })}
             ${textField({ label: "Title", name: "title_text", value: values.title_text, errors, required: true })}
@@ -718,11 +718,11 @@ export function registerLibraryRoutes(app: Express, ctx: AppContext) {
 
   app.post("/wants", (req, res) => {
     const user = me(req);
-    const editionId = req.body.edition_id ? Number(req.body.edition_id) : null;
-    const releaseId = Number(req.body.release_id);
-    addWant(ctx.db, ctx.clock, user.id, releaseId, editionId);
-    addFlash(req, "success", editionId ? "Edition added to your wantlist." : "Release added to your wantlist (any edition).");
-    res.redirect(303, editionId ? `/editions/${editionId}` : `/releases/${releaseId}`);
+    const releaseId = req.body.release_id ? Number(req.body.release_id) : null;
+    const masterId = req.body.master_id ? Number(req.body.master_id) : null;
+    addWant(ctx.db, ctx.clock, user.id, masterId, releaseId);
+    addFlash(req, "success", releaseId ? "Release added to your wantlist." : "Added to your wantlist (any version).");
+    res.redirect(303, releaseId ? `/releases/${releaseId}` : `/masters/${masterId}`);
   });
 
   app.post("/wants/:id/note", (req, res) => {

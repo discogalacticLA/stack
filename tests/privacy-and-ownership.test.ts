@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentFor, makeListing, setup } from "./helpers.js";
-import { getPublicListing, offersForEdition } from "../src/domain/listings.js";
+import { getPublicListing, offersForRelease } from "../src/domain/listings.js";
 import { getOwnCopy, updateCopy } from "../src/domain/library.js";
 import { DomainError } from "../src/lib/errors.js";
 
@@ -16,7 +16,7 @@ describe("private copy fields stay private", () => {
     const json = JSON.stringify(getPublicListing(env.db, listingId));
     expectNoSecrets(json);
     expect(json).not.toMatch(/acquisition|storage_location|private_notes|dj_bpm|crate/);
-    expectNoSecrets(JSON.stringify(offersForEdition(env.db, env.seed.editions["nb-orig"], "US")));
+    expectNoSecrets(JSON.stringify(offersForRelease(env.db, env.seed.releases["nb-orig"], "US")));
   });
 
   it("public JSON API, offers page, listing page and search results don't leak them", async () => {
@@ -25,8 +25,8 @@ describe("private copy fields stay private", () => {
     const anon = await agentFor(env);
     const buyer = await agentFor(env, "mara");
     for (const a of [anon, buyer]) {
-      for (const url of [`/api/listings/${listingId}`, `/api/editions/${env.seed.editions["nb-orig"]}/offers?dest=US`, `/editions/${env.seed.editions["nb-orig"]}/offers?dest=US`,
-        `/listings/${listingId}`, `/editions/${env.seed.editions["nb-orig"]}`, "/discover?q=LLR-004", "/api/search?q=secret"]) {
+      for (const url of [`/api/listings/${listingId}`, `/api/v1/releases/${env.seed.releases["nb-orig"]}/offers?dest=US`, `/releases/${env.seed.releases["nb-orig"]}/offers?dest=US`,
+        `/listings/${listingId}`, `/releases/${env.seed.releases["nb-orig"]}`, "/discover?q=LLR-004", "/api/search?q=secret"]) {
         const r = await a.get(url);
         expect(r.status, url).toBe(200);
         expectNoSecrets(r.text);
@@ -46,7 +46,7 @@ describe("private copy fields stay private", () => {
   it("another user gets 404 for someone else's copy page and its private photos", async () => {
     const env = setup();
     const { createCopy, addCopyPhoto } = await import("../src/domain/library.js");
-    const copyId = createCopy(env.db, env.clock, env.seed.users.sol, env.seed.editions.ut, { media_condition: "VG", sleeve_condition: "VG", private_notes: "SECRET-NOTE-XYZ" });
+    const copyId = createCopy(env.db, env.clock, env.seed.users.sol, env.seed.releases.ut, { media_condition: "VG", sleeve_condition: "VG", private_notes: "SECRET-NOTE-XYZ" });
     const photoId = addCopyPhoto(env.db, env.clock, env.seed.users.sol, copyId, { placeholder_seed: "x" });
     const buyer = await agentFor(env, "mara");
     expect((await buyer.get(`/copies/${copyId}`)).status).toBe(404);
@@ -59,9 +59,9 @@ describe("private copy fields stay private", () => {
   it("a copy is not for sale until the owner lists it", async () => {
     const env = setup();
     const { createCopy } = await import("../src/domain/library.js");
-    const before = offersForEdition(env.db, env.seed.editions.ut, "DE").length;
-    createCopy(env.db, env.clock, env.seed.users.dex, env.seed.editions.ut, { media_condition: "NM", sleeve_condition: "NM" });
-    expect(offersForEdition(env.db, env.seed.editions.ut, "DE").length).toBe(before);
+    const before = offersForRelease(env.db, env.seed.releases.ut, "DE").length;
+    createCopy(env.db, env.clock, env.seed.users.dex, env.seed.releases.ut, { media_condition: "NM", sleeve_condition: "NM" });
+    expect(offersForRelease(env.db, env.seed.releases.ut, "DE").length).toBe(before);
   });
 });
 
@@ -97,7 +97,7 @@ describe("ownership is enforced server-side", () => {
     const { createCopy } = await import("../src/domain/library.js");
     const { createDraftListing } = await import("../src/domain/listings.js");
     const other = await makeListing(env, "dex");
-    const copyId = createCopy(env.db, env.clock, env.seed.users.sol, env.seed.editions.ut, { media_condition: "VG", sleeve_condition: "VG" });
+    const copyId = createCopy(env.db, env.clock, env.seed.users.sol, env.seed.releases.ut, { media_condition: "VG", sleeve_condition: "VG" });
     const base = { price: "10", media_condition: "VG", sleeve_condition: "VG", condition_description: "A fine copy indeed." };
     expect(() => createDraftListing(env.db, env.clock, env.seed.users.sol, copyId, { ...base, shipping_profile_id: String(env.seed.ship.dex) })).toThrow(DomainError);
     expect(() => createDraftListing(env.db, env.clock, env.seed.users.sol, copyId, { ...base, shipping_profile_id: String(env.seed.ship.sol), photo_ids: [String(other.photoId)] })).toThrow(/photo/);
@@ -114,7 +114,7 @@ describe("ownership is enforced server-side", () => {
   it("state-changing requests without a CSRF token are rejected", async () => {
     const env = setup();
     const a = await agentFor(env, "mara");
-    const r = await a.agent.post("/wants").type("form").send({ release_id: String(env.seed.releases["Vale"]) });
+    const r = await a.agent.post("/wants").type("form").send({ release_id: String(env.seed.masters["Vale"]) });
     expect(r.status).toBe(403);
   });
 

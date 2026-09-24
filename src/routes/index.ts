@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import type { AppContext } from "../context.js";
 import { registerApiRoutes } from "./api.js";
+import { registerEntityRoutes } from "./entities.js";
 import { registerAuthRoutes } from "./auth.js";
 import { registerCatalogRoutes } from "./catalog.js";
 import { registerLibraryRoutes } from "./library.js";
@@ -14,6 +15,7 @@ import { registerSellingRoutes } from "./selling.js";
 export function registerRoutes(app: Express, ctx: AppContext) {
   registerAuthRoutes(app, ctx);
   registerCatalogRoutes(app, ctx);
+  registerEntityRoutes(app, ctx);
   registerMediaRoutes(app, ctx);
   registerLibraryRoutes(app, ctx);
   registerCurationRoutes(app, ctx);

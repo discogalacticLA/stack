@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import request from "supertest";
 import { agentFor, setup } from "./helpers.js";
 import { applyBulkAction, listLibrary, matchingRefs, parseLibraryFilters, refKey, resolveBulkScope, type ItemRef } from "../src/domain/library.js";
-import { searchReleases, type SearchParams } from "../src/domain/catalog.js";
+import { browseCatalog, type SearchParams } from "../src/domain/catalog.js";
 
 const tagCount = (env: ReturnType<typeof setup>, owner: string, tag: string) =>
   (env.db.prepare(
@@ -94,7 +94,7 @@ describe("bulk selection respects the selected scope", () => {
 
 describe("search", () => {
   const base: SearchParams = { q: "", terms: [], termMode: "any", formats: [], countries: [], yearFrom: null, yearTo: null, forSale: false, sort: "relevance", page: 1, pageSize: 50 };
-  const titles = (env: ReturnType<typeof setup>, p: Partial<SearchParams>) => searchReleases(env.db, { ...base, ...p }).results.map((r) => r.title).sort();
+  const titles = (env: ReturnType<typeof setup>, p: Partial<SearchParams>) => browseCatalog(env.db, { ...base, ...p }).results.map((r) => r.title).sort();
 
   it("matches artist, title, label and catalog number (ignoring punctuation)", () => {
     const env = setup();
@@ -117,8 +117,8 @@ describe("search", () => {
   it("format, country, year and for-sale filters combine with AND", () => {
     const env = setup();
     expect(titles(env, { formats: ["Cassette"] })).toEqual(["Olvera Tapes Vol. 1"]);
-    expect(titles(env, { countries: ["NL"], yearFrom: 1999 })).toEqual(["Assembly Hall"]);
-    const forSale = searchReleases(env.db, { ...base, forSale: true }).results;
+    expect(titles(env, { countries: ["Netherlands"], yearFrom: 1999 })).toEqual(["Assembly Hall"]);
+    const forSale = browseCatalog(env.db, { ...base, forSale: true }).results;
     expect(forSale.every((r) => r.for_sale_count > 0)).toBe(true);
     expect(forSale.map((r) => r.title)).not.toContain("Olvera Tapes Vol. 1");
     expect(titles(env, { q: "nothing-matches-this" })).toEqual([]);
@@ -129,13 +129,13 @@ describe("HTTP pages and dev-only switcher", () => {
   it("key pages render for anonymous visitors and signed-in users", async () => {
     const env = setup();
     const anon = await agentFor(env);
-    for (const url of ["/discover", "/discover?view=list&q=LLR", "/discover?term=Techno&term=Ambient&mode=all", `/releases/${env.seed.releases["Nightbus Dialogues"]}`,
-      `/editions/${env.seed.editions["nb-orig"]}`, `/compare?ids=${env.seed.editions["nb-orig"]}&ids=${env.seed.editions["nb-repress"]}`,
-      `/editions/${env.seed.editions["nb-orig"]}/offers?dest=US`, "/login", `/media/archive/1`]) {
+    for (const url of ["/discover", "/discover?view=list&q=LLR", "/discover?term=Techno&term=Ambient&mode=all", `/masters/${env.seed.masters["Nightbus Dialogues"]}`,
+      `/releases/${env.seed.releases["nb-orig"]}`, `/compare?ids=${env.seed.releases["nb-orig"]}&ids=${env.seed.releases["nb-repress"]}`,
+      `/releases/${env.seed.releases["nb-orig"]}/offers?dest=US`, "/login", `/media/archive/1`]) {
       expect((await anon.get(url)).status, url).toBe(200);
     }
     const mara = await agentFor(env, "mara");
-    for (const url of ["/library", "/library?page=2", "/library?view=table&group=format", "/library?group=folder", "/crates", "/charts", "/imports", "/copies/new", "/digital/new", "/wants", "/cart", "/orders", "/orders?role=seller", "/selling", `/collection/add?edition_id=${env.seed.editions.va}`]) {
+    for (const url of ["/library", "/library?page=2", "/library?view=table&group=format", "/library?group=folder", "/crates", "/charts", "/imports", "/copies/new", "/digital/new", "/wants", "/cart", "/orders", "/orders?role=seller", "/selling", `/collection/add?release_id=${env.seed.releases.va}`]) {
       expect((await mara.get(url)).status, url).toBe(200);
     }
     const moss = await agentFor(env, "moss");
@@ -144,16 +144,16 @@ describe("HTTP pages and dev-only switcher", () => {
 
   it("compare highlights differing fields", async () => {
     const env = setup();
-    const r = await (await agentFor(env)).get(`/compare?ids=${env.seed.editions["nb-orig"]}&ids=${env.seed.editions["nb-repress"]}`);
+    const r = await (await agentFor(env)).get(`/compare?ids=${env.seed.releases["nb-orig"]}&ids=${env.seed.releases["nb-repress"]}`);
     expect(r.text).toMatch(/<td class="differs">LLR-004<\/td>/);
     expect(r.text).toContain("Vauxhall Hum (Edit)");
-    expect((await (await agentFor(env)).get(`/compare?ids=${env.seed.editions["nb-orig"]}`)).status).toBe(422);
+    expect((await (await agentFor(env)).get(`/compare?ids=${env.seed.releases["nb-orig"]}`)).status).toBe(422);
   });
 
   it("validation errors re-render the form with messages and status 422", async () => {
     const env = setup();
     const mara = await agentFor(env, "mara");
-    const r = await mara.post("/collection/add", { edition_id: env.seed.editions.va, media_condition: "", sleeve_condition: "BAD", acquisition_cost: "12.345", acquired_on: "yesterday" });
+    const r = await mara.post("/collection/add", { release_id: env.seed.releases.va, media_condition: "", sleeve_condition: "BAD", acquisition_cost: "12.345", acquired_on: "yesterday" });
     expect(r.status).toBe(422);
     expect(r.text).toContain("Choose a media condition.");
     expect(r.text).toContain("Acquisition cost must be an amount");

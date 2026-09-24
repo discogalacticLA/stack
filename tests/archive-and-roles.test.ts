@@ -7,9 +7,9 @@ import { parseMediaLinkLines, parseYouTubeId } from "../src/lib/mediaLinks.js";
 const source = { source_kind: "physical_copy", source_citation: "Examined my own copy", source_notes: "Checked the runout and labels carefully." };
 
 function correction(env: ReturnType<typeof setup>, username: string, overrides: Record<string, string>) {
-  const editionId = env.seed.editions["nb-orig"];
+  const editionId = env.seed.releases["nb-orig"];
   return submitProposal(env.db, env.clock, env.user(username), {
-    kind: "correction", release_id: env.seed.releases["Nightbus Dialogues"], target_edition_id: editionId, imagePaths: [],
+    kind: "correction", master_id: env.seed.masters["Nightbus Dialogues"], target_release_id: editionId, imagePaths: [],
     body: { ...(editionAsPayload(env.db, editionId) as any), ...source, ...overrides },
   });
 }
@@ -20,7 +20,7 @@ describe("contributor vs moderator permissions", () => {
     expect(() => correction(env, "mara", { edition_notes: "x" })).toThrow(/contributor role/);
     const buyer = await agentFor(env, "mara");
     expect((await buyer.get("/contribute")).status).toBe(403);
-    expect((await buyer.post(`/contribute/correction?edition_id=${env.seed.editions["nb-orig"]}`, { format: "Vinyl", ...source })).status).toBe(403);
+    expect((await buyer.post(`/contribute/correction?release_id=${env.seed.releases["nb-orig"]}`, { format: "Vinyl", ...source })).status).toBe(403);
   });
 
   it("contributors can propose but not accept or reject", async () => {
@@ -35,7 +35,7 @@ describe("contributor vs moderator permissions", () => {
     expect((await cato.get("/moderate")).status).toBe(403);
     // Still pending, edition unchanged.
     expect((env.db.prepare("SELECT status FROM proposals WHERE id = ?").get(id) as any).status).toBe("pending");
-    expect((env.db.prepare("SELECT edition_notes FROM editions WHERE id = ?").get(env.seed.editions["nb-orig"]) as any).edition_notes).not.toContain("contributor");
+    expect((env.db.prepare("SELECT notes FROM releases WHERE id = ?").get(env.seed.releases["nb-orig"]) as any).notes).not.toContain("contributor");
   });
 
   it("moderators accept; the change is applied and the revision records who and what", async () => {
@@ -44,16 +44,16 @@ describe("contributor vs moderator permissions", () => {
     const id = (r as any).proposalId;
     const mod = await agentFor(env, "moss");
     expect((await mod.post(`/proposals/${id}/accept`, { review_note: "ok" })).status).toBe(303);
-    const e = env.db.prepare("SELECT catalog_number, catalog_number_norm, date_note, verification_status FROM editions WHERE id = ?").get(env.seed.editions["nb-orig"]) as any;
+    const e = env.db.prepare("SELECT catalog_number, catalog_number_norm, date_note, verification_status FROM releases WHERE id = ?").get(env.seed.releases["nb-orig"]) as any;
     expect(e).toMatchObject({ catalog_number: "LLR-004A", catalog_number_norm: "LLR004A", date_note: "Month uncertain.", verification_status: "reviewed" });
-    const rev = env.db.prepare("SELECT * FROM edition_revisions WHERE proposal_id = ?").get(id) as any;
+    const rev = env.db.prepare("SELECT * FROM release_revisions WHERE proposal_id = ?").get(id) as any;
     expect(rev.proposed_by).toBe(env.seed.users.cato);
     expect(rev.accepted_by).toBe(env.seed.users.moss);
     expect(JSON.parse(rev.changes).map((c: any) => c.field).sort()).toEqual(["catalog_number", "date_note"]);
     expect(JSON.parse(rev.changes).find((c: any) => c.field === "catalog_number")).toEqual({ field: "catalog_number", before: "LLR-004", after: "LLR-004A" });
     // Can't be accepted twice.
     expect((await mod.post(`/proposals/${id}/accept`)).status).toBe(303); // redirected with an error flash
-    expect((env.db.prepare("SELECT COUNT(*) AS n FROM edition_revisions WHERE proposal_id = ?").get(id) as any).n).toBe(1);
+    expect((env.db.prepare("SELECT COUNT(*) AS n FROM release_revisions WHERE proposal_id = ?").get(id) as any).n).toBe(1);
   });
 
   it("moderators can't accept their own proposals", () => {
@@ -67,7 +67,7 @@ describe("contributor vs moderator permissions", () => {
     const r = correction(env, "cato", { catalog_number: "WRONG-1" });
     expect(() => rejectProposal(env.db, env.clock, env.user("moss"), (r as any).proposalId, "")).toThrow();
     rejectProposal(env.db, env.clock, env.user("moss"), (r as any).proposalId, "No evidence for this change.");
-    expect((env.db.prepare("SELECT catalog_number FROM editions WHERE id = ?").get(env.seed.editions["nb-orig"]) as any).catalog_number).toBe("LLR-004");
+    expect((env.db.prepare("SELECT catalog_number FROM releases WHERE id = ?").get(env.seed.releases["nb-orig"]) as any).catalog_number).toBe("LLR-004");
   });
 
   it("proposals need source notes, and a correction must change something", () => {
@@ -92,24 +92,24 @@ describe("new editions and duplicate candidates", () => {
   it("shows likely duplicates before creating an edition, then accepts after acknowledgement", () => {
     const env = setup();
     const base = { label_name: "Lowlight Recordings", catalog_number: "llr 004", format: "Vinyl", country: "GB", release_year: "1997", ...source };
-    const input = { kind: "new_edition" as const, release_id: env.seed.releases["Nightbus Dialogues"], target_edition_id: null, imagePaths: [] };
+    const input = { kind: "new_edition" as const, master_id: env.seed.masters["Nightbus Dialogues"], target_release_id: null, imagePaths: [] };
     const first = submitProposal(env.db, env.clock, env.user("cato"), { ...input, body: base });
     expect(first.ok).toBe(false);
     const dups = (first as any).duplicates;
-    expect(dups[0].edition.catalog_number).toBe("LLR-004");
+    expect(dups[0].release.catalog_number).toBe("LLR-004");
     expect(dups[0].reasons.join(" ")).toMatch(/Same catalog number/);
-    expect(dups.map((d: any) => d.edition.catalog_number)).toContain("LLR-004R"); // similar, not identical
+    expect(dups.map((d: any) => d.release.catalog_number)).toContain("LLR-004R"); // similar, not identical
     expect((env.db.prepare("SELECT COUNT(*) AS n FROM proposals WHERE kind = 'new_edition'").get() as any).n).toBe(0);
     const second = submitProposal(env.db, env.clock, env.user("cato"), { ...input, body: { ...base, confirm_not_duplicate: "yes" } });
     expect(second.ok).toBe(true);
     const newId = acceptProposal(env.db, env.clock, env.user("moss"), (second as any).proposalId, null);
-    expect((env.db.prepare("SELECT created_by, release_id FROM editions WHERE id = ?").get(newId) as any)).toEqual({ created_by: env.seed.users.cato, release_id: env.seed.releases["Nightbus Dialogues"] });
+    expect((env.db.prepare("SELECT created_by, master_id FROM releases WHERE id = ?").get(newId) as any)).toEqual({ created_by: env.seed.users.cato, master_id: env.seed.masters["Nightbus Dialogues"] });
   });
 
   it("similar catalog numbers on different labels are flagged, not merged", () => {
     const env = setup();
-    const c = findDuplicateCandidates(env.db, { release_id: env.seed.releases["Tidal Rooms"], label_id: null, catalog_number: "LLR-04", format: "Vinyl", country: "US", release_year: 1998 });
-    expect(c.map((x) => x.edition.catalog_number)).toContain("LLR-04");
+    const c = findDuplicateCandidates(env.db, { master_id: env.seed.masters["Tidal Rooms"], label_id: null, catalog_number: "LLR-04", format: "Vinyl", country: "US", year: 1998 });
+    expect(c.map((x) => x.release.catalog_number)).toContain("LLR-04");
   });
 });
 
@@ -132,11 +132,11 @@ describe("YouTube listening links", () => {
   it("links go through moderation and render as click-to-load previews", async () => {
     const env = setup();
     const r = correction(env, "cato", { listening_links: "A1 | https://www.youtube.com/watch?v=abcdefghijk" });
-    const editionId = env.seed.editions["nb-orig"];
+    const editionId = env.seed.releases["nb-orig"];
     const anon = await agentFor(env);
-    expect((await anon.get(`/editions/${editionId}`)).text).not.toContain("abcdefghijk"); // pending: not shown
+    expect((await anon.get(`/releases/${editionId}`)).text).not.toContain("abcdefghijk"); // pending: not shown
     acceptProposal(env.db, env.clock, env.user("moss"), (r as any).proposalId, null);
-    const page = (await anon.get(`/editions/${editionId}`)).text;
+    const page = (await anon.get(`/releases/${editionId}`)).text;
     expect(page).toContain('data-embed-src="https://www.youtube-nocookie.com/embed/abcdefghijk?rel=0"');
     expect(page).not.toMatch(/<iframe/); // nothing loads until the viewer clicks
     expect(page).toContain("https://www.youtube.com/watch?v=abcdefghijk");

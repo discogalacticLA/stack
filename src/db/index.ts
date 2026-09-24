@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { afterUp, guards } from "./hooks.js";
 
 export type DB = Database.Database;
 
@@ -24,7 +25,7 @@ export function migrate(db: DB, opts: { until?: string } = {}): string[] {
   const applied = new Set(
     db.prepare("SELECT name FROM schema_migrations").all().map((r: any) => r.name as string),
   );
-  const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
+  const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql")).sort();
   const ran: string[] = [];
   for (const file of files) {
     if (opts.until && file > opts.until) break;
@@ -37,6 +38,7 @@ export function migrate(db: DB, opts: { until?: string } = {}): string[] {
     try {
       db.transaction(() => {
         db.exec(sql);
+        afterUp[file]?.(db);
         if (rebuild) {
           const problems = db.pragma("foreign_key_check") as unknown[];
           if (problems.length) throw new Error(`Migration ${file} broke foreign keys: ${JSON.stringify(problems.slice(0, 5))}`);
@@ -49,4 +51,30 @@ export function migrate(db: DB, opts: { until?: string } = {}): string[] {
     ran.push(file);
   }
   return ran;
+}
+
+/**
+ * Reverts the most recently applied migration using its `.down.sql` file. Refuses when there is
+ * no down file, or when the migration's guard reports that reverting would lose data.
+ */
+export function migrateDown(db: DB): string {
+  const last = db.prepare("SELECT name FROM schema_migrations ORDER BY name DESC LIMIT 1").get() as { name: string } | undefined;
+  if (!last) throw new Error("No migrations have been applied.");
+  const downFile = path.join(MIGRATIONS_DIR, last.name.replace(/\.sql$/, ".down.sql"));
+  if (!fs.existsSync(downFile)) throw new Error(`${last.name} has no down migration (it is forward-only; see docs/ARCHITECTURE.md).`);
+  const problem = guards[last.name]?.(db);
+  if (problem) throw new Error(`Refusing to revert ${last.name}: ${problem}`);
+  const sql = fs.readFileSync(downFile, "utf8");
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(sql);
+      const problems = db.pragma("foreign_key_check") as unknown[];
+      if (problems.length) throw new Error(`Down migration broke foreign keys: ${JSON.stringify(problems.slice(0, 5))}`);
+      db.prepare("DELETE FROM schema_migrations WHERE name = ?").run(last.name);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+  return last.name;
 }

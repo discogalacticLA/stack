@@ -6,11 +6,12 @@ import { openDatabase } from "../src/db/index.js";
 import { loadConfig } from "../src/config.js";
 import { hashPassword, loadUser } from "../src/lib/auth.js";
 import { systemClock, iso, type Clock } from "../src/lib/clock.js";
-import { normalizeCatno } from "../src/domain/catalog.js";
+import { normalizeCode, normalizeName, parseDuration } from "../src/services/catalog-api/normalize.js";
+import { reindexAll } from "../src/services/search/index.js";
 import { addCopyPhoto, createCopy, createCrate } from "../src/domain/library.js";
 import { createDraftListing, publishListing, saveShippingProfile } from "../src/domain/listings.js";
 import { addToCart, checkout, transitionOrder } from "../src/domain/orders.js";
-import { acceptProposal, editionAsPayload, submitProposal } from "../src/domain/proposals.js";
+import { acceptProposal, releaseAsPayload, submitProposal } from "../src/domain/proposals.js";
 import { addWant } from "../src/domain/wants.js";
 import { ARTISTS, RELEASES } from "./data.js";
 
@@ -40,47 +41,68 @@ export function seedDatabase(db: DB, clock: Clock = systemClock) {
     users[u.username] = id;
   }
 
-  // ───── Archive ─────
+  // ───── Catalog (synthetic; provenance = 'seed') ─────
+  const seedSource = (db.prepare("SELECT id FROM catalog_sources WHERE name = 'seed'").get() as { id: number }).id;
   const artistIds: Ids = {};
   for (const [name, sort] of Object.entries(ARTISTS)) {
-    artistIds[name] = Number(db.prepare("INSERT INTO artists (name, sort_name, profile, created_at) VALUES (?, ?, 'Synthetic demo artist.', ?)").run(name, sort, now).lastInsertRowid);
+    artistIds[name] = Number(db.prepare("INSERT INTO artists (name, sort_name, normalized_name, profile, created_at, updated_at) VALUES (?, ?, ?, 'Synthetic demo artist.', ?, ?)")
+      .run(name, sort, normalizeName(name), now, now).lastInsertRowid);
   }
   const labelIds: Ids = {};
   const labelId = (name: string | null) => {
     if (!name) return null;
-    if (!labelIds[name]) labelIds[name] = Number(db.prepare("INSERT INTO labels (name, profile, created_at) VALUES (?, 'Synthetic demo label.', ?)").run(name, now).lastInsertRowid);
+    if (!labelIds[name]) labelIds[name] = Number(db.prepare("INSERT INTO labels (name, normalized_name, profile, created_at, updated_at) VALUES (?, ?, 'Synthetic demo label.', ?, ?)").run(name, normalizeName(name), now, now).lastInsertRowid);
     return labelIds[name];
   };
-  const ed: Ids = {};
-  const rel: Ids = {};
+  const companyIds: Ids = {};
+  const companyId = (name: string) => {
+    if (!companyIds[name]) companyIds[name] = Number(db.prepare("INSERT INTO companies (name, normalized_name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(name, normalizeName(name), now, now).lastInsertRowid);
+    return companyIds[name];
+  };
+  const ed: Ids = {}; // releases (pressings) by fixture key
+  const rel: Ids = {}; // masters by title
+  const released = (e: { year: number | null; month?: number; day?: number }) =>
+    !e.year ? null : !e.month ? String(e.year) : !e.day ? `${e.year}-${String(e.month).padStart(2, "0")}` : `${e.year}-${String(e.month).padStart(2, "0")}-${String(e.day).padStart(2, "0")}`;
   for (const r of RELEASES) {
-    const rid = Number(db.prepare("INSERT INTO releases (title, release_type, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(r.title, r.type, r.description ?? null, now, now).lastInsertRowid);
-    rel[r.title] = rid;
-    r.artists.forEach(([name, join], i) => db.prepare("INSERT INTO release_artists (release_id, artist_id, position, join_text) VALUES (?, ?, ?, ?)").run(rid, artistIds[name], i, join ?? ""));
-    for (const g of r.genres) db.prepare("INSERT INTO release_terms (release_id, kind, term) VALUES (?, 'genre', ?)").run(rid, g);
-    for (const s of r.styles) db.prepare("INSERT INTO release_terms (release_id, kind, term) VALUES (?, 'style', ?)").run(rid, s);
+    const years = r.editions.map((e) => e.year).filter((y): y is number => !!y);
+    const mid = Number(db.prepare("INSERT INTO masters (title, normalized_title, release_type, description, year, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(r.title, normalizeName(r.title), r.type, r.description ?? null, years.length ? Math.min(...years) : null, now, now).lastInsertRowid);
+    rel[r.title] = mid;
+    r.artists.forEach(([name, join], i) => db.prepare("INSERT INTO master_artists (master_id, artist_id, name, join_text, position) VALUES (?, ?, ?, ?, ?)").run(mid, artistIds[name], name, join ?? "", i));
+    for (const g of r.genres) db.prepare("INSERT INTO master_genres (master_id, genre) VALUES (?, ?)").run(mid, g);
+    for (const st of r.styles) db.prepare("INSERT INTO master_styles (master_id, style) VALUES (?, ?)").run(mid, st);
     for (const e of r.editions) {
+      const lid = labelId(e.label);
       const eid = Number(
         db.prepare(
-          `INSERT INTO editions (release_id, label_id, catalog_number, catalog_number_norm, format, format_details, country, release_year, release_month, release_day,
-             date_note, edition_notes, verification_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(rid, labelId(e.label), e.catno, normalizeCatno(e.catno), e.format, e.details ?? null, e.country, e.year, e.month ?? null, e.day ?? null,
-          e.dateNote ?? null, e.notes ?? null, e.status, now, now).lastInsertRowid,
+          `INSERT INTO releases (master_id, title, normalized_title, year, released_date, country, notes, label_id, catalog_number, catalog_number_norm, format, format_details,
+             date_note, verification_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(mid, r.title, normalizeName(r.title), e.year, released(e), e.country, e.notes ?? null, lid, e.catno, normalizeCode(e.catno), e.format, e.details ?? null,
+          e.dateNote ?? null, e.status, now, now).lastInsertRowid,
       );
       ed[e.key] = eid;
+      r.artists.forEach(([name, join], i) => db.prepare("INSERT INTO release_artists (release_id, artist_id, name, join_text, position) VALUES (?, ?, ?, ?, ?)").run(eid, artistIds[name], name, join ?? "", i));
+      for (const g of r.genres) db.prepare("INSERT INTO release_genres (release_id, genre) VALUES (?, ?)").run(eid, g);
+      for (const st of r.styles) db.prepare("INSERT INTO release_styles (release_id, style) VALUES (?, ?)").run(eid, st);
+      if (e.label || e.catno) db.prepare("INSERT INTO release_labels (release_id, label_id, name, catalog_number, catalog_number_norm, position) VALUES (?, ?, ?, ?, ?, 0)").run(eid, lid, e.label ?? "Not On Label", e.catno, normalizeCode(e.catno));
+      const fid = Number(db.prepare("INSERT INTO release_formats (release_id, name, quantity, position) VALUES (?, ?, 1, 0)").run(eid, e.format).lastInsertRowid);
+      String(e.details ?? "").split(",").map((x) => x.trim()).filter(Boolean).forEach((d, i) => db.prepare("INSERT INTO release_format_descriptions (format_id, description, position) VALUES (?, ?, ?)").run(fid, d, i));
       e.tracks.forEach(([pos, title, dur, artist], i) => {
-        const secs = dur ? Number(dur.split(":")[0]) * 60 + Number(dur.split(":")[1]) : null;
-        db.prepare("INSERT INTO tracks (edition_id, position, title, artist_credit, duration_seconds, sort_order) VALUES (?, ?, ?, ?, ?, ?)").run(eid, pos, title, artist ?? null, secs, i);
+        db.prepare("INSERT INTO release_tracks (release_id, position, title, duration, duration_seconds, artist_credit, sequence) VALUES (?, ?, ?, ?, ?, ?, ?)").run(eid, pos, title, dur ?? null, parseDuration(dur), artist ?? null, i);
       });
-      for (const [kind, value, note] of e.identifiers ?? []) db.prepare("INSERT INTO edition_identifiers (edition_id, kind, value, note) VALUES (?, ?, ?, ?)").run(eid, kind, value, note ?? null);
-      for (const [kind, citation] of e.sources ?? []) db.prepare("INSERT INTO archival_sources (edition_id, kind, citation, created_at) VALUES (?, ?, ?, ?)").run(eid, kind, citation, now);
+      for (const [type, value, note] of e.identifiers ?? []) db.prepare("INSERT INTO release_identifiers (release_id, identifier_type, value, description, normalized_value) VALUES (?, ?, ?, ?, ?)").run(eid, type, value, note ?? null, normalizeCode(value));
+      (e.companies ?? []).forEach(([role, name], i) => db.prepare("INSERT INTO release_companies (release_id, company_id, role, position) VALUES (?, ?, ?, ?)").run(eid, companyId(name), role, i));
+      (e.credits ?? []).forEach(([role, name], i) => db.prepare("INSERT INTO release_extra_artists (release_id, artist_id, name, role, position) VALUES (?, ?, ?, ?, ?)").run(eid, artistIds[name] ?? null, name, role, i));
+      for (const [kind, citation] of e.sources ?? []) db.prepare("INSERT INTO archival_sources (release_id, kind, citation, created_at) VALUES (?, ?, ?, ?)").run(eid, kind, citation, now);
       for (const kind of e.images ?? []) {
-        db.prepare("INSERT INTO archive_images (edition_id, kind, placeholder_seed, attribution, created_at) VALUES (?, ?, ?, ?, ?)")
+        db.prepare("INSERT INTO archive_images (release_id, kind, placeholder_seed, attribution, created_at) VALUES (?, ?, ?, ?, ?)")
           .run(eid, kind, `${e.key}-${kind}`, "Original placeholder artwork generated for this prototype", now);
       }
-      db.prepare("INSERT INTO edition_revisions (edition_id, summary, changes, created_at) VALUES (?, 'Imported from synthetic seed data', '[]', ?)").run(eid, now);
+      db.prepare("INSERT INTO release_revisions (release_id, summary, changes, created_at) VALUES (?, 'Imported from synthetic seed data', '[]', ?)").run(eid, now);
+      db.prepare("INSERT INTO catalog_provenance (entity_type, entity_id, source_id, content_hash, first_seen_at, last_seen_at) VALUES ('release', ?, ?, 'seed', ?, ?)").run(eid, seedSource, now, now);
     }
   }
+  reindexAll(db);
 
   // ───── Shipping profiles ─────
   const ship: Ids = {};
@@ -179,20 +201,20 @@ export function seedDatabase(db: DB, clock: Clock = systemClock) {
   const cato = loadUser(db, users.cato)!;
   const moss = loadUser(db, users.moss)!;
   // Accepted correction (shows revision history on LLR-004R).
-  const base = editionAsPayload(db, ed["nb-repress"]);
+  const base = releaseAsPayload(db, ed["nb-repress"]);
   const accepted = submitProposal(db, clock, cato, {
-    kind: "correction", release_id: rel["Nightbus Dialogues"], target_edition_id: ed["nb-repress"], imagePaths: [],
+    kind: "correction", master_id: rel["Nightbus Dialogues"], target_release_id: ed["nb-repress"], imagePaths: [],
     body: { ...base, release_month: "", format_details: '12", 33 ⅓ RPM, Repress, Grey labels', source_kind: "physical_copy", source_citation: "Cato's copy (synthetic)", source_notes: "Label colour confirmed from my copy (synthetic demo)." } as any,
   });
   if (accepted.ok) acceptProposal(db, clock, moss, accepted.proposalId, "Matches the photo evidence.");
   // Pending correction for the moderator queue (adds uncertain country info to the test pressing).
-  const tp = editionAsPayload(db, ed["nb-tp"]);
+  const tp = releaseAsPayload(db, ed["nb-tp"]);
   submitProposal(db, clock, cato, {
-    kind: "correction", release_id: rel["Nightbus Dialogues"], target_edition_id: ed["nb-tp"], imagePaths: [],
-    body: { ...tp, country: "GB", date_note: "Undated; the sleeve stamp suggests early 1997.", source_kind: "other", source_citation: "Conversation with a former label employee (synthetic)", source_notes: "Recollection only; treat country as likely rather than certain." } as any,
+    kind: "correction", master_id: rel["Nightbus Dialogues"], target_release_id: ed["nb-tp"], imagePaths: [],
+    body: { ...tp, country: "UK", date_note: "Undated; the sleeve stamp suggests early 1997.", source_kind: "other", source_citation: "Conversation with a former label employee (synthetic)", source_notes: "Recollection only; treat country as likely rather than certain." } as any,
   });
 
-  return { users, editions: ed, releases: rel, ship };
+  return { users, releases: ed, masters: rel, ship };
 }
 
 // CLI: npm run seed  (refuses to touch a non-empty database)  ·  npm run reset  (deletes and reseeds)
