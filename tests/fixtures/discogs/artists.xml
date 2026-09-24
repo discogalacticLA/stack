@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<artists>
+<artist><images/><id>101</id><name>Aurelia Kaan</name><realname>Aurelia Kaanström</realname><profile>Synthetic fixture artist. Deep house producer.</profile><data_quality>Needs Vote</data_quality><urls><url>https://example.org/aurelia</url></urls><namevariations><name>A. Kaan</name><name>Kaan</name></namevariations><aliases><name id="102">Night Service</name></aliases></artist>
+<artist><id>102</id><name>Night Service</name><profile>Alias of Aurelia Kaan (synthetic).</profile><data_quality>Correct</data_quality><aliases><name id="101">Aurelia Kaan</name></aliases></artist>
+<artist><id>103</id><name>The Low Hours</name><profile>Synthetic duo.</profile><data_quality>Needs Vote</data_quality><members><id>104</id><name id="104">Idris Vale</name><id>105</id><name id="105">Paz Olvera</name></members></artist>
+<artist><id>104</id><name>Idris Vale</name><data_quality>Needs Vote</data_quality><groups><name id="103">The Low Hours</name></groups></artist>
+<artist><id>105</id><name>Paz Olvera</name><data_quality>Needs Vote</data_quality></artist>
+<artist><id>106</id><name>José González-Ñuñez</name><realname>José Ñuñez</realname><data_quality>Needs Vote</data_quality></artist>
+<artist><id>107</id><name>井上 ひかり</name><data_quality>Needs Vote</data_quality></artist>
+<artist><id>108</id><name>Kovač Unit (2)</name><data_quality>Needs Vote</data_quality></artist>
+<artist><id>109</id><name>Minimal Artist</name></artist>
+<artist><id>110</id><profile>This record has no name and must be rejected.</profile></artist>
+</artists>

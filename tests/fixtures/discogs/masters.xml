@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<masters>
+<master id="301"><main_release>401</main_release><images/><artists><artist><id>101</id><name>Aurelia Kaan</name><anv/><join>&amp;</join><role/><tracks/></artist><artist><id>106</id><name>José González-Ñuñez</name><anv>José G.</anv><join/><role/><tracks/></artist></artists><genres><genre>Electronic</genre><genre>Jazz</genre></genres><styles><style>Deep House</style><style>Garage</style></styles><year>1997</year><title>Nightbus Dialogues</title><data_quality>Correct</data_quality></master>
+<master id="302"><main_release>499</main_release><artists><artist><id>103</id><name>The Low Hours</name><anv/><join/><role/><tracks/></artist></artists><genres><genre>Electronic</genre></genres><styles><style>Dub Techno</style></styles><year>1998</year><title>Tidal Rooms</title><data_quality>Needs Vote</data_quality></master>
+<master id="303"><main_release>406</main_release><artists><artist><id>998</id><name>Unimported Artist</name><anv/><join/><role/><tracks/></artist></artists><genres><genre>Electronic</genre></genres><year>2001</year><title>Orphan Master</title><data_quality>Needs Vote</data_quality></master>
+</masters>

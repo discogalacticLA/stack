@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<releases>
+<release id="401" status="Accepted"><images/>
+  <artists><artist><id>101</id><name>Aurelia Kaan</name><anv/><join>&amp;</join><role/><tracks/></artist><artist><id>106</id><name>José González-Ñuñez</name><anv>José G.</anv><join/><role/><tracks/></artist></artists>
+  <title>Nightbus Dialogues</title>
+  <labels><label name="Lowlight Recordings" catno="LLR-004" id="201"/><label name="Lowlight White" catno="LLRW-004" id="202"/></labels>
+  <extraartists><artist><id>104</id><name>Idris Vale</name><anv/><join/><role>Producer</role><tracks/></artist><artist><id>105</id><name>Paz Olvera</name><anv/><join/><role>Mastered By</role><tracks>A1, B1</tracks></artist></extraartists>
+  <formats><format name="Vinyl" qty="2" text="Clear"><descriptions><description>12"</description><description>33 ⅓ RPM</description><description>EP</description></descriptions></format><format name="CD" qty="1" text=""><descriptions><description>Promo</description></descriptions></format></formats>
+  <genres><genre>Electronic</genre><genre>Jazz</genre></genres>
+  <styles><style>Deep House</style><style>Garage</style><style>Broken Beat</style></styles>
+  <country>UK</country><released>1997-03-00</released>
+  <notes>Synthetic fixture (corrected in the v2 dump): clear vinyl, promo CD included.</notes>
+  <data_quality>Correct</data_quality>
+  <master_id is_main_release="true">301</master_id>
+  <tracklist>
+    <track><position>A1</position><title>Nightbus Dialogues</title><duration>6:48</duration><artists><artist><id>106</id><name>José González-Ñuñez</name><anv/><join/><role/><tracks/></artist></artists></track>
+    <track><position>A2</position><title>Last Stop Blue</title><duration>5:30</duration></track>
+    <track><position></position><title>Side B</title><duration></duration></track>
+    <track><position>B1</position><title>Vauxhall Suite</title><duration>12:02</duration><sub_tracks><track><position>B1a</position><title>Part One</title><duration>6:00</duration></track><track><position>B1b</position><title>Part Two</title><duration>6:02</duration></track></sub_tracks></track>
+    <track><position>B2</position><title>Dialogues (Kovač Remix)</title><duration>7:40</duration><extraartists><artist><id>108</id><name>Kovač Unit (2)</name><anv>Kovač Unit</anv><join/><role>Remix</role><tracks/></artist></extraartists></track>
+  </tracklist>
+  <identifiers><identifier type="Barcode" value="5 012345 678900" description="Text"/><identifier type="Matrix / Runout" description="Side A" value="LLR-004-A ◇ LOW ◇"/><identifier type="Label Code" value="LC 00000"/><identifier type="SPARS Code" value="DDD"/></identifiers>
+  <videos><video duration="408" embed="true" src="https://www.youtube.com/watch?v=abcdefghijk"><title>Nightbus Dialogues (synthetic video)</title><description>Fixture</description></video><video duration="1" embed="true" src="https://example.org/not-youtube"><title>ignored</title></video></videos>
+  <companies><company><id>203</id><name>Sample Pressing Plant</name><catno/><entity_type>17</entity_type><entity_type_name>Pressed By</entity_type_name><resource_url>https://example.org</resource_url></company><company><id>204</id><name>Demo Mastering Room</name><catno>DMR-1</catno><entity_type>30</entity_type><entity_type_name>Mastered At</entity_type_name></company><company><name>Unknown Cutting Room</name><entity_type>31</entity_type><entity_type_name>Lacquer Cut At</entity_type_name></company></companies>
+</release>
+<release id="402" status="Accepted"><artists><artist><id>101</id><name>Aurelia Kaan</name><anv/><join/><role/><tracks/></artist></artists><title>Nightbus Dialogues</title><labels><label name="Lowlight Recordings" catno="LLR-004R" id="201"/></labels><formats><format name="Vinyl" qty="1" text=""><descriptions><description>12"</description><description>Repress</description></descriptions></format></formats><genres><genre>Electronic</genre></genres><styles><style>Deep House</style></styles><country>UK</country><released>2004</released><data_quality>Needs Vote</data_quality><master_id is_main_release="false">301</master_id><tracklist><track><position>A1</position><title>Nightbus Dialogues</title><duration>6:48</duration></track></tracklist><companies><company><id>203</id><name>Sample Pressing Plant</name><catno/><entity_type>17</entity_type><entity_type_name>Pressed By</entity_type_name></company></companies></release>
+<release id="404" status="Accepted"><artists><artist><id>999</id><name>Not Imported Artist</name><anv/><join/><role/><tracks/></artist></artists><title>Unresolved References</title><labels><label name="Unimported Label" catno="UL-1" id="299"/></labels><formats><format name="8-Track Cartridge" qty="1" text=""><descriptions><description>Album</description></descriptions></format></formats><genres><genre>Rock</genre></genres><country>US</country><released>1975-06-12</released><data_quality>Needs Vote</data_quality><master_id is_main_release="true">399</master_id><tracklist/></release>
+<release id="406" status="Accepted"><artists><artist><id>998</id><name>Unimported Artist</name><anv/><join/><role/><tracks/></artist></artists><title>Orphan Master</title><labels><label name="Heliotrope Audio" catno="HEL-406" id="205"/></labels><formats><format name="Reel-To-Reel" qty="1" text=""/></formats><genres><genre>Electronic</genre></genres><country>Japan</country><released>2001-11</released><data_quality>Needs Vote</data_quality><master_id is_main_release="true">303</master_id><tracklist><track><position>1</position><title>Orphan</title><duration>3:03</duration></track></tracklist></release>
+</releases>

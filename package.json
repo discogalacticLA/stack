@@ -1,8 +1,8 @@
 {
-  "name": "record-archive-prototype",
+  "name": "music-library-project",
   "version": "0.1.0",
   "private": true,
-  "description": "Local prototype: independent music archive, collection manager and simulated record marketplace (working title).",
+  "description": "Music Library Project (temporary name): catalog, private collections, DJ libraries, curation and a future marketplace. Local prototype.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -16,15 +16,21 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "tsx e2e/walkthrough.ts",
     "check": "npm run typecheck && npm test",
-    "fixtures:large": "tsx scripts/large-fixtures.ts"
+    "fixtures:large": "tsx scripts/large-fixtures.ts",
+    "catalog": "tsx src/services/importer/cli.ts",
+    "catalog:import": "tsx src/services/importer/cli.ts import",
+    "catalog:status": "tsx src/services/importer/cli.ts status",
+    "catalog:resume": "tsx src/services/importer/cli.ts resume",
+    "fixtures:discogs": "tsx scripts/discogs-fixtures.ts",
+    "migrate:down": "tsx src/db/migrate-cli.ts --down"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.11.1",
     "multer": "^2.4.0",
+    "saxes": "^6.0.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

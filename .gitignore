@@ -1,5 +1,17 @@
 node_modules/
-data/
 e2e/output/
 *.log
 .env
+.env.*
+!.env.example
+
+# Local databases, uploads, import logs and downloaded dumps never go into git.
+data/*
+!data/discogs-dumps/
+data/discogs-dumps/*
+!data/discogs-dumps/.gitkeep
+!data/discogs-dumps/README.md
+*.db
+*.db-shm
+*.db-wal
+*.part

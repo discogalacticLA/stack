@@ -116,6 +116,8 @@ export function previewImport(db: DB, clock: Clock, ownerId: number, input: Prev
     warnings: parsed.rows.filter((r) => r.warnings.length).length,
     missing_from_export: missing.length,
     playlists: countPlaylists(parsed.playlists),
+    // Rows whose Discogs release id is in our catalog (they will reference our internal release).
+    matched_catalog: parsed.rows.filter((r) => !r.errors.length && catalogMatch(db, input.kind, r.externalId)).length,
   };
 
   return db.transaction(() => {
@@ -377,11 +379,28 @@ function applyRow(db: DB, clock: Clock, batch: any, kind: SourceKind, row: any) 
     );
     createHolding(db, batch, parsed, resultEntry, now, kind);
   }
+  // Link still-unresolved holdings to the catalog once their Discogs release has been imported.
+  // (A catalog link is not a user edit; it is not reverted by undo.)
+  if (resultEntry && action !== "skip") {
+    const match = catalogMatch(db, kind, row.external_id);
+    if (match) {
+      db.prepare("UPDATE copies SET release_id = ? WHERE source_entry_id = ? AND release_id IS NULL").run(match.release_id, resultEntry);
+      db.prepare("UPDATE digital_holdings SET release_id = ? WHERE source_entry_id = ? AND release_id IS NULL").run(match.release_id, resultEntry);
+      db.prepare("UPDATE wants SET release_id = ?, master_id = ? WHERE source_entry_id = ? AND release_id IS NULL").run(match.release_id, match.master_id, resultEntry);
+    }
+  }
   db.prepare("UPDATE import_rows SET applied = 1, result_entry_id = ?, previous_state = ? WHERE id = ?").run(resultEntry, previous ? JSON.stringify(previous) : null, row.id);
+}
+
+/** Our internal release (and its master) for a Discogs release id, when the catalog has it. */
+export function catalogMatch(db: DB, kind: SourceKind, externalId: string | null): { release_id: number; master_id: number | null } | null {
+  if (kind === "rekordbox" || !externalId) return null;
+  return (db.prepare("SELECT id AS release_id, master_id FROM releases WHERE discogs_release_id = ?").get(Number(externalId)) as any) ?? null;
 }
 
 function createHolding(db: DB, batch: any, parsed: ParsedRow, entryId: number, now: string, kind: SourceKind) {
   const f = parsed.fields as Record<string, any>;
+  const match = catalogMatch(db, kind, parsed.externalId);
   const common = { created_by_batch_id: batch.id, source_entry_id: entryId, created_at: now, updated_at: now, date_added: f.date_added ?? now };
   let table: string;
   let cols: Record<string, unknown>;
@@ -389,7 +408,7 @@ function createHolding(db: DB, batch: any, parsed: ParsedRow, entryId: number, n
     table = "copies";
     cols = { owner_id: batch.owner_id, artist_text: f.artist_text, title_text: f.title_text, label_text: f.label_text, catno_text: f.catno_text,
       format_raw: f.format_raw, format_group: f.format_group, release_year: f.release_year, source_folder: f.source_folder,
-      media_condition: f.media_condition ?? "NG", sleeve_condition: f.sleeve_condition ?? "NG", ...common };
+      media_condition: f.media_condition ?? "NG", sleeve_condition: f.sleeve_condition ?? "NG", release_id: match?.release_id ?? null, ...common };
   } else if (parsed.target === "digital") {
     table = "digital_holdings";
     const fromDiscogs = kind === "discogs_collection";
@@ -399,12 +418,13 @@ function createHolding(db: DB, batch: any, parsed: ParsedRow, entryId: number, n
       file_format: fromDiscogs ? (String(f.format_raw ?? "").split(",")[1]?.trim() || null) : f.file_format, bitrate_kbps: f.bitrate_kbps ?? null,
       sample_rate_hz: f.sample_rate_hz ?? null, duration_seconds: f.duration_seconds ?? null, file_size_bytes: f.file_size_bytes ?? null,
       bpm_x100: f.bpm_x100 ?? null, musical_key: f.musical_key ?? null, rating: f.rating ?? null, play_count: f.play_count ?? null,
-      file_location: f.file_location ?? null, source_comments: f.source_comments ?? null, ...common };
+      file_location: f.file_location ?? null, source_comments: f.source_comments ?? null, release_id: match?.release_id ?? null, ...common };
   } else {
     table = "wants";
     const { date_added: _ignored, ...rest } = common;
     cols = { user_id: batch.owner_id, want_kind: "edition", artist_text: f.artist_text, title_text: f.title_text, label_text: f.label_text,
-      catno_text: f.catno_text, format_raw: f.format_raw, format_group: f.format_group, release_year: f.release_year, ...rest };
+      catno_text: f.catno_text, format_raw: f.format_raw, format_group: f.format_group, release_year: f.release_year,
+      release_id: match?.release_id ?? null, master_id: match?.master_id ?? null, ...rest };
   }
   const keys = Object.keys(cols);
   db.prepare(`INSERT INTO ${table} (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(...keys.map((k) => cols[k]));

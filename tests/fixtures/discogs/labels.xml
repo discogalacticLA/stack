@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<labels>
+<label><images/><id>201</id><name>Lowlight Recordings</name><contactinfo>Synthetic address, Demo City</contactinfo><profile>Synthetic fixture label.</profile><data_quality>Needs Vote</data_quality><urls><url>https://example.org/lowlight</url></urls><sublabels><label id="202">Lowlight White</label></sublabels></label>
+<label><id>202</id><name>Lowlight White</name><data_quality>Needs Vote</data_quality><parentLabel id="201">Lowlight Recordings</parentLabel></label>
+<label><id>203</id><name>Sample Pressing Plant</name><profile>Synthetic pressing plant.</profile><data_quality>Needs Vote</data_quality></label>
+<label><id>204</id><name>Demo Mastering Room</name><data_quality>Needs Vote</data_quality></label>
+<label><id>205</id><name>Heliotrope Audio</name><data_quality>Needs Vote</data_quality></label>
+<label><id>206</id><name>Not On Label (Paz Olvera Self-released)</name><data_quality>Needs Vote</data_quality></label>
+</labels>
