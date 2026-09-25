@@ -77,15 +77,17 @@ before any hosting.**
   (`--bulk`), the real dump imports at a flat ~5,250/s: 300k releases in 80 s, including every
   rebuild.
 - The projected full releases load is roughly 1.3–1.5 hours and ~63 GB.
-- Next: a 1M-release bulk run to confirm the curve stays flat. Then a fully linked import into a
-  dedicated database (`import-all --bulk`), with at least ~100 GB of free disk space.
+- A 1M-release bulk run confirmed it: a flat 4,300–4,500/s after 300k, 427 s in total including
+  all rebuilds. The estimate for a full linked `import-all --bulk` is about 2–2.5 h and ~70 GB.
+- Open: search tail latency (p95 155–348 ms at 1M) needs work before the full catalog is
+  searchable interactively.
 - PostgreSQL is still required before hosting: single writer, paid infrastructure, concurrency.
   See POSTGRES_READINESS.md.
 
 ## Suggested next steps
 
-1. Run a 1M-release bulk benchmark on the Mac. If it stays flat, do a full `import-all --bulk` into a
-   dedicated database file.
+1. Full `import-all --bulk` into a dedicated database file on the Mac. Then measure search latency
+   on the full catalog, and improve prefix and short-term queries.
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.

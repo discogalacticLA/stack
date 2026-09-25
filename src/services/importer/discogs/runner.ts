@@ -271,11 +271,14 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
       opts.onStep?.(`Rebuilding ${indexInfo.dropped.length} deferred indexes (one sort each; no per-record progress)…`);
       indexInfo.rebuildMs = restoreDeferredIndexes(db, (name, i, n) => opts.onStep?.(`  index ${i}/${n}: ${name}`)).ms;
     }
-    if (!keepDeferred) opts.onStep?.(skip > 0 || deferIndexes ? "Linking references across the catalog…" : "Linking references to this run's records…");
+    if (!keepDeferred) opts.onStep?.(skip > 0 ? "Linking references across the catalog (resumed run)…" : "Linking references to this run's records…");
     const tr = performance.now();
     // A resumed run didn't record the ids written before the interruption, so it reconciles fully.
-    // A bulk run (full load) links everything once after its rebuild; import-all does that itself.
-    const reconciled = keepDeferred ? {} : reconcileReferences(db, skip > 0 || deferIndexes ? {} : { scope: SCOPE[type] });
+    // Otherwise (bulk or not) only references to this run's records can be newly resolvable:
+    // everything else was resolved when the rows were written. On the real dump, a catalog-wide
+    // pass here cost 130 s after 1M releases to find nothing. import-all --defer-indexes does its
+    // own single pass after the rebuild.
+    const reconciled = keepDeferred ? {} : reconcileReferences(db, skip > 0 ? {} : { scope: SCOPE[type] });
     // Store what is still unresolved after reconciliation (catalog-wide), not the write-time count.
     if (!keepDeferred) p.unresolved = Object.values(unresolvedCounts(db)).reduce((a, b) => a + b, 0);
     phase.reconcile += performance.now() - tr;

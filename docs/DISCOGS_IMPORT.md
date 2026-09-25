@@ -308,6 +308,41 @@ slowdown beyond 50k real rows hasn't been measured.
    | **Total** | **roughly 1.3–1.5 h** |
    | Database size | ~63 GB for releases alone (artists, labels and masters add a few GB) |
 
+9. **Bulk mode, first 1,000,000 real releases (owner's Mac):**
+
+   | Measurement | Value |
+   |---|---|
+   | Load | ~218 s: parse ~59 s, normalise 14 s, write 146 s |
+   | Rate | 5,300/s for the first 300k, then a flat 4,300–4,500/s to 1M (no decay) |
+   | Index rebuild | 51.9 s |
+   | Catalog-wide reconcile | 129.6 s |
+   | Search rebuild | 27.0 s |
+   | Total | 427 s |
+   | Database | 3,969 MB, of which search index 351 MB |
+   | Search latency | titles p50 3.8 ms / p95 155 ms; catalog numbers p50 5.8 ms / p95 348 ms |
+
+   - **Fixed after this run:** a single bulk run now links only references to its own records,
+     like a normal run. The catalog-wide pass spent 130 s checking 14M references to entities
+     that were never imported. `import-all --defer-indexes` still does one catalog-wide pass after
+     its rebuild.
+   - In a linked import (artists → labels → masters → releases), most references resolve when
+     they're written, so that pass has little left to do.
+   - **Full-import estimate:**
+
+     | Stage | Estimate |
+     |---|---|
+     | Releases load | ~65 min |
+     | Artists, labels and masters | ~20–30 min |
+     | Index rebuild | ~15–20 min (a sort) |
+     | Search rebuild | ~8 min |
+     | Linking | ~5–15 min |
+     | **Total** | **about 2–2.5 h** |
+     | Database size | ~70 GB |
+
+   - **Open issue: search tail latency** grows with catalog size (p95 155–348 ms at 1M). Short
+     prefix terms, such as parts of catalog numbers, match very large sets. This needs work before
+     the full catalog is searchable interactively. It doesn't block the import.
+
 The tuned-cache run, for reference:
 
 ```bash
