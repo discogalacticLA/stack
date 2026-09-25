@@ -94,7 +94,7 @@ function checksumFor(file: string, checksumPath?: string): string | null {
 async function main() {
   const config = loadConfig();
   const db = openDatabase(config.databasePath);
-  const progress = { onProgress: printProgress, progressEveryMs: 5000 };
+  const progress = { onProgress: printProgress, progressEveryMs: 5000, onStep: (m: string) => console.error(`${new Date().toLocaleTimeString()} ${m}`) };
   try {
     switch (cmd) {
       case "import": {

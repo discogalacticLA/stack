@@ -74,6 +74,7 @@ const r = await runImport(db, {
   file, type: flag("type") as any, limit, batchSize: Number(flag("batch")) || undefined, deferSearch: has("defer-search"), deferIndexes: has("defer-indexes"),
   logDir: fs.mkdtempSync(path.join(os.tmpdir(), "bench-logs-")),
   progressEveryMs: 10_000,
+  onStep: (m) => console.error(`${new Date().toLocaleTimeString()} ${m}`),
   profile: has("profile"),
   onProgress: (p) => {
     if (p.profile) {
@@ -100,12 +101,15 @@ const r = await runImport(db, {
 const importMs = performance.now() - t0;
 let reindexMs: number | null = null;
 if (has("defer-search")) {
+  console.error(`${new Date().toLocaleTimeString()} Rebuilding the search index…`);
   const t = performance.now();
   reindexAll(db);
   reindexMs = performance.now() - t;
 }
 clearInterval(sampler);
+console.error(`${new Date().toLocaleTimeString()} Measuring database size (reads the whole file)…`);
 const after = { ...pageSizes(), file: fileBytes(dbPath) };
+console.error(`${new Date().toLocaleTimeString()} Measuring search latency…`);
 
 // Search latency on titles and catalog numbers that exist in what was just imported.
 const titles = (db.prepare("SELECT title FROM releases WHERE discogs_release_id IS NOT NULL ORDER BY random() LIMIT 50").all() as { title: string }[]).map((x) => x.title);

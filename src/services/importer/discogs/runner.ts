@@ -73,6 +73,8 @@ export interface RunOptions {
   deferIndexes?: boolean;
   /** Internal (import-all): leave the indexes dropped at the end; the caller rebuilds and reconciles. */
   keepIndexesDeferred?: boolean;
+  /** Called with a short message when a long step without record progress starts (rebuilds, linking). */
+  onStep?: (message: string) => void;
   /** Collect per-statement timings (reported via onProgress and in the result). */
   profile?: boolean;
   /** Test hook: throw a fatal error after this many records have been committed. */
@@ -265,7 +267,11 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
     }
     flushWithWarnings();
     const keepDeferred = deferIndexes && opts.keepIndexesDeferred;
-    if (deferIndexes && !keepDeferred) indexInfo.rebuildMs = restoreDeferredIndexes(db).ms;
+    if (deferIndexes && !keepDeferred) {
+      opts.onStep?.(`Rebuilding ${indexInfo.dropped.length} deferred indexes (one sort each; no per-record progress)…`);
+      indexInfo.rebuildMs = restoreDeferredIndexes(db, (name, i, n) => opts.onStep?.(`  index ${i}/${n}: ${name}`)).ms;
+    }
+    if (!keepDeferred) opts.onStep?.(skip > 0 || deferIndexes ? "Linking references across the catalog…" : "Linking references to this run's records…");
     const tr = performance.now();
     // A resumed run didn't record the ids written before the interruption, so it reconciles fully.
     // A bulk run (full load) links everything once after its rebuild; import-all does that itself.
@@ -324,7 +330,9 @@ export async function runImportAll(db: DB, opts: ImportAllOptions) {
   let indexRebuild: { restored: number; ms: number; reconcileMs: number } | null = null;
   if (opts.deferIndexes) {
     // Rebuild each deferred index once over the full tables, then link everything in one pass.
-    const r = restoreDeferredIndexes(db);
+    opts.onStep?.("Rebuilding deferred indexes (one sort each; no per-record progress)…");
+    const r = restoreDeferredIndexes(db, (name, i, n) => opts.onStep?.(`  index ${i}/${n}: ${name}`));
+    opts.onStep?.("Linking references across the catalog…");
     const t = performance.now();
     reconcileReferences(db);
     indexRebuild = { restored: r.restored.length, ms: r.ms, reconcileMs: performance.now() - t };
@@ -332,6 +340,7 @@ export async function runImportAll(db: DB, opts: ImportAllOptions) {
   let reindexed: { documents: number; ms: number } | null = null;
   if (opts.deferSearch && runs.length) {
     // Each run already reconciled the references to what it imported.
+    opts.onStep?.("Rebuilding the search index…");
     const t = performance.now();
     const documents = reindexAll(db);
     reindexed = { documents, ms: performance.now() - t };

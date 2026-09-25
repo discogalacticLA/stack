@@ -45,10 +45,11 @@ export function dropDeferrableIndexes(db: DB, runId: number | null, now = new Da
 }
 
 /** Recreates every recorded index (each built once from the full table). Returns names and time. */
-export function restoreDeferredIndexes(db: DB): { restored: string[]; ms: number } {
+export function restoreDeferredIndexes(db: DB, onIndex?: (name: string, i: number, n: number) => void): { restored: string[]; ms: number } {
   const t = performance.now();
   const rows = db.prepare("SELECT name, sql FROM deferred_indexes ORDER BY name").all() as { name: string; sql: string }[];
-  for (const r of rows) {
+  for (const [i, r] of rows.entries()) {
+    onIndex?.(r.name, i + 1, rows.length);
     // One index per transaction: a crash mid-restore loses at most the index being built.
     db.transaction(() => {
       db.exec(r.sql.replace(/^CREATE (UNIQUE )?INDEX (IF NOT EXISTS )?/i, (_m, u) => `CREATE ${u ?? ""}INDEX IF NOT EXISTS `));
