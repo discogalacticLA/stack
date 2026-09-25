@@ -17,6 +17,7 @@ import { FatalImportError, streamRecords, type XNode } from "./stream.js";
 import { artistFromNode, labelFromNode, masterFromNode, RecordError, releaseFromNode } from "./normalize.js";
 import { DiscogsCatalogWriter, reconcileReferences, resetReconcileScope, unresolvedCounts, type BatchResult, type StatementTime, type WriterTimings } from "./writer.js";
 import { markSearchStale, reindexAll, searchBackend } from "../../search/index.js";
+import { deferredIndexes, dropDeferrableIndexes, restoreDeferredIndexes } from "./bulk-indexes.js";
 
 export type DumpType = "artists" | "labels" | "masters" | "releases";
 export const IMPORT_ORDER: DumpType[] = ["artists", "labels", "masters", "releases"];
@@ -65,6 +66,13 @@ export interface RunOptions {
    * --defer-search` does that once at the end. A resumed run keeps the mode it started with.
    */
   deferSearch?: boolean;
+  /**
+   * Bulk-load mode: drop secondary indexes on scattered values for the run and rebuild them once
+   * at the end (see bulk-indexes.ts). A resumed run keeps the mode it started with.
+   */
+  deferIndexes?: boolean;
+  /** Internal (import-all): leave the indexes dropped at the end; the caller rebuilds and reconciles. */
+  keepIndexesDeferred?: boolean;
   /** Collect per-statement timings (reported via onProgress and in the result). */
   profile?: boolean;
   /** Test hook: throw a fatal error after this many records have been committed. */
@@ -91,7 +99,11 @@ export function parseDumpFileName(file: string): { type: DumpType | null; versio
  */
 export interface ImportTimings { wall: number; parse: number; normalize: number; write: number; reconcile: number; writer: WriterTimings }
 
-export interface ImportResult extends Progress { status: string; runId: number; searchMode: "incremental" | "deferred"; timings: ImportTimings }
+export interface ImportResult extends Progress {
+  status: string; runId: number; searchMode: "incremental" | "deferred"; indexMode: "maintained" | "deferred";
+  indexes: { dropped: string[]; restoredBeforeRun: string[]; rebuildMs: number };
+  timings: ImportTimings;
+}
 
 export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult> {
   const nowDate = opts.now ?? (() => new Date());
@@ -107,6 +119,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
   let runId: number;
   let skip = 0;
   let deferSearch = !!opts.deferSearch;
+  let deferIndexes = !!opts.deferIndexes;
   if (opts.resumeRunId) {
     const run = db.prepare("SELECT * FROM catalog_import_runs WHERE id = ?").get(opts.resumeRunId) as any;
     if (!run) throw new FatalImportError(`Import run #${opts.resumeRunId} not found.`);
@@ -116,6 +129,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
     runId = run.id;
     skip = run.checkpoint_record_index;
     deferSearch = opts.deferSearch ?? run.search_mode === "deferred";
+    deferIndexes = opts.deferIndexes ?? run.index_mode === "deferred";
     db.prepare("UPDATE catalog_import_runs SET status = 'running', fatal_error = NULL, updated_at = ? WHERE id = ?").run(now(), runId);
   } else {
     const active = db.prepare("SELECT id FROM catalog_import_runs WHERE entity_type = ? AND status = 'running'").get(type) as any;
@@ -125,7 +139,12 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
        VALUES ('discogs', ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
     ).run(type, meta.version, meta.date, path.basename(opts.file), path.resolve(opts.file), fileSize, opts.expectedHash ?? null, deferSearch ? "deferred" : "incremental", now(), now(), now()).lastInsertRowid);
   }
-  db.prepare("UPDATE catalog_import_runs SET search_mode = ? WHERE id = ?").run(deferSearch ? "deferred" : "incremental", runId);
+  db.prepare("UPDATE catalog_import_runs SET search_mode = ?, index_mode = ? WHERE id = ?").run(deferSearch ? "deferred" : "incremental", deferIndexes ? "deferred" : "maintained", runId);
+  // Indexes: a normal run never writes while indexes are missing (e.g. after an interrupted bulk
+  // load); a bulk run drops the deferrable ones, recording their definitions first.
+  const indexInfo = { dropped: [] as string[], restoredBeforeRun: [] as string[], rebuildMs: 0 };
+  if (!deferIndexes && deferredIndexes(db).length) indexInfo.restoredBeforeRun = restoreDeferredIndexes(db).restored;
+  if (deferIndexes) indexInfo.dropped = dropDeferrableIndexes(db, runId, now());
   // Mark stale before the first write, so an interrupted deferred run still leaves the flag set.
   if (deferSearch) markSearchStale(db, `Import run #${runId} (${type}) was run with deferred search`, now());
   const logDir = opts.logDir ?? path.resolve("data/import-logs");
@@ -245,12 +264,14 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
       if (!(e instanceof StopReading)) throw e;
     }
     flushWithWarnings();
+    const keepDeferred = deferIndexes && opts.keepIndexesDeferred;
+    if (deferIndexes && !keepDeferred) indexInfo.rebuildMs = restoreDeferredIndexes(db).ms;
     const tr = performance.now();
     // A resumed run didn't record the ids written before the interruption, so it reconciles fully.
-    const reconciled = reconcileReferences(db, skip > 0 ? {} : { scope: SCOPE[type] });
+    // A bulk run (full load) links everything once after its rebuild; import-all does that itself.
+    const reconciled = keepDeferred ? {} : reconcileReferences(db, skip > 0 || deferIndexes ? {} : { scope: SCOPE[type] });
     // Store what is still unresolved after reconciliation (catalog-wide), not the write-time count.
-    const remaining = unresolvedCounts(db);
-    p.unresolved = Object.values(remaining).reduce((a, b) => a + b, 0);
+    if (!keepDeferred) p.unresolved = Object.values(unresolvedCounts(db)).reduce((a, b) => a + b, 0);
     phase.reconcile += performance.now() - tr;
     db.prepare("UPDATE catalog_import_runs SET unresolved_references = ? WHERE id = ?").run(p.unresolved, runId);
     if (!stats) {
@@ -276,7 +297,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
   }
   await new Promise((r) => log.end(r));
   report(true);
-  return { ...p, status, runId, searchMode: deferSearch ? "deferred" : "incremental", timings: timingsOf() };
+  return { ...p, status, runId, searchMode: deferSearch ? "deferred" : "incremental", indexMode: deferIndexes ? "deferred" : "maintained", indexes: indexInfo, timings: timingsOf() };
 }
 
 export interface ImportAllOptions extends Omit<RunOptions, "file" | "type" | "resumeRunId" | "expectedHash" | "limit"> {
@@ -298,7 +319,15 @@ export async function runImportAll(db: DB, opts: ImportAllOptions) {
     const f = files.find((x) => parseDumpFileName(x).type === type);
     if (!f) { skipped.push(type); continue; }
     const file = path.join(opts.dir, f);
-    runs.push(await runImport(db, { ...opts, file, type, expectedHash: opts.checksumFor?.(file) ?? null }));
+    runs.push(await runImport(db, { ...opts, file, type, expectedHash: opts.checksumFor?.(file) ?? null, keepIndexesDeferred: opts.deferIndexes }));
+  }
+  let indexRebuild: { restored: number; ms: number; reconcileMs: number } | null = null;
+  if (opts.deferIndexes) {
+    // Rebuild each deferred index once over the full tables, then link everything in one pass.
+    const r = restoreDeferredIndexes(db);
+    const t = performance.now();
+    reconcileReferences(db);
+    indexRebuild = { restored: r.restored.length, ms: r.ms, reconcileMs: performance.now() - t };
   }
   let reindexed: { documents: number; ms: number } | null = null;
   if (opts.deferSearch && runs.length) {
@@ -307,7 +336,7 @@ export async function runImportAll(db: DB, opts: ImportAllOptions) {
     const documents = reindexAll(db);
     reindexed = { documents, ms: performance.now() - t };
   }
-  return { runs, skipped, reindexed, unresolved: unresolvedCounts(db) };
+  return { runs, skipped, indexRebuild, reindexed, unresolved: unresolvedCounts(db) };
 }
 
 export function getRun(db: DB, id?: number) {

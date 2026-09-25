@@ -6,7 +6,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 - Local prototype only. It is not production-ready and not deployed, and it has no real payments.
 - Branch `claude/music-archive-marketplace-ibxhs3` in the `stack` repo.
-- `npm run check` runs the typecheck and 133 vitest tests across 9 files, all passing at the time
+- `npm run check` runs the typecheck and 137 vitest tests across 9 files, all passing at the time
   of writing.
 
 ## Milestones done

@@ -1,8 +1,8 @@
 /**
  * Catalog command line.
  *
- *   npm run catalog -- import <file.xml[.gz]> [--type releases] [--batch 1000] [--limit N] [--checksum CHECKSUM.txt] [--defer-search]
- *   npm run catalog -- import-all <dir> [--date 20260901] [--defer-search]   artists → labels → masters → releases
+ *   npm run catalog -- import <file.xml[.gz]> [--type releases] [--batch 1000] [--limit N] [--checksum CHECKSUM.txt] [--defer-search] [--defer-indexes] [--bulk]
+ *   npm run catalog -- import-all <dir> [--date 20260901] [--defer-search] [--defer-indexes] [--bulk]   artists → labels → masters → releases
  *   npm run catalog -- resume <runId>
  *   npm run catalog -- status [runId]
  *   npm run catalog -- errors <runId> [--limit 50]
@@ -14,6 +14,10 @@
  *   npm run catalog -- download --date 20260901 [--types artists,labels,masters,releases] [--dir data/discogs-dumps] [--base URL]
  *   npm run catalog -- download --url <link> [--url <link> …] [--dir data/discogs-dumps]   exact links from https://data.discogs.com/
  *
+ *   npm run catalog -- indexes:restore                           rebuild indexes left deferred by an interrupted bulk load
+ *
+ * --bulk = --defer-search + --defer-indexes: the fastest first load. --defer-indexes drops the
+ * secondary indexes on scattered values for the load and rebuilds each once at the end.
  * --defer-search: bulk-load mode. Catalog rows are written without search-index updates; the
  * index is marked stale. import-all rebuilds it once at the end; after `import` run search:reindex.
  *
@@ -25,6 +29,7 @@ import { loadConfig } from "../../config.js";
 import { openDatabase } from "../../db/index.js";
 import { reindexAll, searchIndexState } from "../search/index.js";
 import { census } from "./discogs/coverage.js";
+import { deferredIndexes, restoreDeferredIndexes } from "./discogs/bulk-indexes.js";
 import { DEFAULT_DUMP_BASE_URL, downloadDumps, dumpFileNames, dumpUrl, parseChecksums } from "./discogs/download.js";
 import { FatalImportError, sha256File } from "./discogs/stream.js";
 import { cancelRun, getRun, listRuns, parseDumpFileName, runErrors, runImport, runImportAll, type ImportResult, type Progress } from "./discogs/runner.js";
@@ -49,7 +54,12 @@ function printTimings(r: ImportResult) {
     `(lookups ${ms(w.lookup)}, hashing ${ms(w.hash)}, provenance ${ms(w.provenance)}, search ${ms(w.search)}, rows+commit ${ms(rows)}) · reconcile ${ms(t.reconcile)} · search mode ${r.searchMode}`);
 }
 
+const deferSearchFlag = () => has("defer-search") || has("bulk");
+const deferIndexesFlag = () => has("defer-indexes") || has("bulk");
+
 function printSearchState(db: any) {
+  const missing = deferredIndexes(db);
+  if (missing.length) console.log(`${missing.length} catalog indexes are deferred (bulk load in progress or interrupted since ${missing[0].dropped_at}). A normal import restores them first, or run: npm run catalog -- indexes:restore`);
   const s = searchIndexState(db);
   if (s.stale_since) console.log(`Search index is STALE since ${s.stale_since} (${s.stale_reason}). Run: npm run catalog -- search:reindex`);
   else console.log(`Search index up to date${s.last_rebuilt_at ? ` (last full rebuild ${s.last_rebuilt_at}, ${n(s.documents ?? 0)} documents)` : ""}.`);
@@ -96,7 +106,7 @@ async function main() {
           const actual = await sha256File(file);
           if (actual !== expected) throw new FatalImportError(`Checksum mismatch for ${file}: expected ${expected}, got ${actual}. Re-download the file.`);
         }
-        const r = await runImport(db, { file, type: flag("type") as any, batchSize: Number(flag("batch")) || undefined, limit: flag("limit") ? Number(flag("limit")) : undefined, expectedHash: expected, deferSearch: has("defer-search"), ...progress });
+        const r = await runImport(db, { file, type: flag("type") as any, batchSize: Number(flag("batch")) || undefined, limit: flag("limit") ? Number(flag("limit")) : undefined, expectedHash: expected, deferSearch: deferSearchFlag(), deferIndexes: deferIndexesFlag(), ...progress });
         printRun(getRun(db, r.runId));
         printTimings(r);
         printSearchState(db);
@@ -108,11 +118,12 @@ async function main() {
         const checksum = fs.readdirSync(dir).find((f) => /CHECKSUM/i.test(f) && (!date || f.includes(date)));
         const sums = checksum ? parseChecksums(fs.readFileSync(path.join(dir, checksum), "utf8")) : new Map<string, string>();
         const r = await runImportAll(db, {
-          dir, date, deferSearch: has("defer-search"), batchSize: Number(flag("batch")) || undefined, ...progress,
+          dir, date, deferSearch: deferSearchFlag(), deferIndexes: deferIndexesFlag(), batchSize: Number(flag("batch")) || undefined, ...progress,
           checksumFor: (file) => sums.get(path.basename(file)) ?? null,
         });
         for (const type of r.skipped) console.error(`No ${type} dump in ${dir}; skipped.`);
         for (const run of r.runs) { printRun(getRun(db, run.runId)); printTimings(run); }
+        if (r.indexRebuild) console.log(`Rebuilt ${r.indexRebuild.restored} deferred indexes in ${ms(r.indexRebuild.ms)}; linked references in ${ms(r.indexRebuild.reconcileMs)}.`);
         if (r.reindexed) console.log(`Search index rebuilt once: ${n(r.reindexed.documents)} documents in ${ms(r.reindexed.ms)}.`);
         console.log("Unresolved references:", r.unresolved);
         printSearchState(db);
@@ -144,6 +155,12 @@ async function main() {
         console.log("Still unresolved:", unresolvedCounts(db));
         console.log("Inconsistent (should be 0):", staleReferenceCounts(db));
         break;
+      case "indexes:restore": {
+        const r = restoreDeferredIndexes(db);
+        console.log(r.restored.length ? `Rebuilt ${r.restored.length} indexes in ${ms(r.ms)}: ${r.restored.join(", ")}` : "No deferred indexes.");
+        if (r.restored.length) console.log("Linked:", reconcileReferences(db));
+        break;
+      }
       case "search:reindex":
         const t = performance.now();
         console.log(`Indexed ${n(reindexAll(db))} catalog records in ${ms(performance.now() - t)}.`);

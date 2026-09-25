@@ -17,7 +17,7 @@ the domain functions and the routes.
 | Schema | Medium: write a fresh Postgres baseline. The SQLite rebuild migrations don't port |
 | Search (FTS5 → tsvector/GIN or OpenSearch) | Medium: one new `SearchBackend`, plus ranking re-tuning |
 | Sync → async data access (~263 call sites, 7 transaction wrappers in scope) | **Large**: the main cost |
-| Bulk first load (COPY into staging tables) | Medium: new code path, and the biggest speed win |
+| Bulk first load (COPY into staging tables) | Medium: new code path, and the biggest speed win. The deferred-index idea (drop the secondary indexes, load, rebuild) carries over directly |
 
 ## POSTGRES_PORTABLE (works as is, or with trivial edits)
 
@@ -75,7 +75,7 @@ the domain functions and the routes.
 ## MIGRATION RISKS
 
 - **Async ripple.** Converting the sync call sites changes almost every catalog function signature,
-  and the route handlers that call them. It's mechanical but wide. The test suite (133 tests) is the
+  and the route handlers that call them. It's mechanical but wide. The test suite (137 tests) is the
   safety net.
 - **Search behaviour changes.**
   - Ranking: FTS5 bm25 with weights 10/3/6/1 will not rank the same as `ts_rank_cd`.

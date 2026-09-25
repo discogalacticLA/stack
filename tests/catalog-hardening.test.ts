@@ -395,17 +395,85 @@ describe("import statements never scan a whole table", () => {
     (env.db as any).prepare = orig;
     // Bookkeeping on small tables (runs, errors, sources) and the end-of-run unresolved counts
     // (index-only scans of partial indexes) are allowed; catalog-table scans are not.
-    const allowed = /^(catalog_import_runs|catalog_import_errors|catalog_sources|search_index_state|json_each|reconcile_scope|sqlite_master|sqlite_schema)$/;
+    const allowed = /^(catalog_import_runs|catalog_import_errors|catalog_sources|search_index_state|deferred_indexes|json_each|reconcile_scope|sqlite_master|sqlite_schema)$/;
     const offenders: string[] = [];
     for (const sql of seen) {
       if (/SELECT COUNT\(\*\) AS n FROM \w+ WHERE \w+ IS NULL AND \w+ IS NOT NULL/.test(sql)) continue; // unresolvedCounts
       const plan = (orig(`EXPLAIN QUERY PLAN ${sql}`).all(...new Array((sql.match(/\?/g) ?? []).length).fill(1)) as { detail: string }[]).map((r) => r.detail);
       for (const d of plan) {
         if (/VIRTUAL TABLE INDEX 0:=/.test(d)) continue; // FTS5 rowid lookup
-        const m = /^SCAN (?:temp\.)?(\w+)(?! USING (?:COVERING )?INDEX)/.exec(d);
+        const m = /^SCAN (?:temp\.)?(\w+)\b(?! USING (?:COVERING )?INDEX)/.exec(d);
         if (m && !allowed.test(m[1])) offenders.push(`${m[1]}: ${sql.replace(/\s+/g, " ").slice(0, 120)}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("bulk-load mode (--defer-indexes)", () => {
+  const indexDefs = (env: TestEnv) => env.db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name").all();
+
+  it("import-all with deferred indexes and search gives the same catalog, links and search results; indexes come back identical", async () => {
+    const d = fixtureDir();
+    const normal = setup();
+    await runImportAll(normal.db, { dir: d, logDir: logDir() });
+    const bulk = setup();
+    const before = indexDefs(bulk);
+    const { DEFERRABLE_INDEXES, deferredIndexes } = await import("../src/services/importer/discogs/bulk-indexes.js");
+    let sawMissing = 0;
+    const r = await runImportAll(bulk.db, {
+      dir: d, deferIndexes: true, deferSearch: true, logDir: logDir(), progressEveryMs: 0,
+      onProgress: () => {
+        const present = bulk.db.prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND name IN (${DEFERRABLE_INDEXES.map(() => "?").join(",")})`).get(...DEFERRABLE_INDEXES) as { n: number };
+        if (present.n === 0 && deferredIndexes(bulk.db).length === DEFERRABLE_INDEXES.length) sawMissing++;
+      },
+    });
+    expect(sawMissing).toBeGreaterThan(0);                       // the indexes really were off during the load
+    expect(r.runs.every((x) => x.indexMode === "deferred")).toBe(true);
+    expect(r.runs[0].indexes.dropped).toHaveLength(DEFERRABLE_INDEXES.length);
+    expect(r.indexRebuild!.restored).toBe(DEFERRABLE_INDEXES.length);
+    expect(indexDefs(bulk)).toEqual(before);                     // identical definitions afterwards
+    expect(deferredIndexes(bulk.db)).toEqual([]);
+    expect(tableCounts(bulk)).toEqual(tableCounts(normal));
+    expect(unresolvedFor(bulk)).toEqual(unresolvedFor(normal));
+    expect(results(bulk)).toEqual(results(normal));
+    const links = (env: TestEnv) => env.db.prepare("SELECT r.discogs_release_id, m.discogs_master_id, l.discogs_label_id FROM releases r LEFT JOIN masters m ON m.id = r.master_id LEFT JOIN labels l ON l.id = r.label_id WHERE r.discogs_release_id IS NOT NULL ORDER BY 1").all();
+    expect(links(bulk)).toEqual(links(normal));
+  });
+
+  it("a single bulk import rebuilds its indexes and links references itself", async () => {
+    const env = setup();
+    const before = indexDefs(env);
+    for (const t of ["artists", "labels", "masters", "releases"]) {
+      const r = await runImport(env.db, { file: path.join(FIX, `${t}.xml.gz`), deferIndexes: true, logDir: logDir() });
+      expect(r.indexes.rebuildMs).toBeGreaterThan(0);
+    }
+    expect(indexDefs(env)).toEqual(before);
+    const ordered = setup();
+    for (const t of ["artists", "labels", "masters", "releases"]) await runImport(ordered.db, { file: path.join(FIX, `${t}.xml.gz`), logDir: logDir() });
+    expect(unresolvedFor(env)).toEqual(unresolvedFor(ordered));
+  });
+
+  it("an interrupted bulk load keeps a record of the dropped indexes; the next normal import restores them before writing", async () => {
+    const env = setup();
+    const before = indexDefs(env);
+    const { deferredIndexes, restoreDeferredIndexes } = await import("../src/services/importer/discogs/bulk-indexes.js");
+    const file = path.join(FIX, "releases.xml.gz");
+    await expect(runImport(env.db, { file, deferIndexes: true, batchSize: 2, failAfterRecords: 2, logDir: logDir() })).rejects.toThrow(/Simulated/);
+    expect(deferredIndexes(env.db).length).toBeGreaterThan(0);
+    expect(indexDefs(env)).not.toEqual(before);
+    // The resume stays in bulk mode (indexes still off during it), then rebuilds at the end.
+    const failed = getRun(env.db);
+    expect(failed.index_mode).toBe("deferred");
+    const resumed = await runImport(env.db, { file, resumeRunId: failed.id, logDir: logDir() });
+    expect(resumed.indexMode).toBe("deferred");
+    expect(indexDefs(env)).toEqual(before);
+    // A normal import after an interruption restores first.
+    await expect(runImport(env.db, { file: path.join(FIX, "labels.xml.gz"), deferIndexes: true, batchSize: 1, failAfterRecords: 1, logDir: logDir() })).rejects.toThrow(/Simulated/);
+    expect(deferredIndexes(env.db).length).toBeGreaterThan(0);
+    const normalRun = await runImport(env.db, { file: path.join(FIX, "artists.xml.gz"), logDir: logDir() });
+    expect(normalRun.indexes.restoredBeforeRun.length).toBeGreaterThan(0);
+    expect(indexDefs(env)).toEqual(before);
+    expect(restoreDeferredIndexes(env.db).restored).toEqual([]);
   });
 });

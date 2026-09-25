@@ -3,7 +3,7 @@
  * time per phase, peak memory, database growth, search-index growth and search latency.
  *
  *   npx tsx scripts/benchmark-import.ts --file data/discogs-dumps/discogs_20260901_releases.xml.gz \
- *     --limit 50000 --db data/bench-incremental.db [--defer-search] [--out bench.json] [--progress] [--profile]
+ *     --limit 50000 --db data/bench-incremental.db [--defer-search] [--defer-indexes] [--out bench.json] [--progress] [--profile]
  *
  * --profile times every writer statement and prints the six slowest per 10 s interval (with
  * --progress), which shows which statement grows as the database grows.
@@ -71,7 +71,7 @@ const lastStmts = new Map<string, { sql: string; ms: number; calls: number }>();
 const profileIntervals: unknown[] = [];
 let lastAt = t0;
 const r = await runImport(db, {
-  file, type: flag("type") as any, limit, batchSize: Number(flag("batch")) || undefined, deferSearch: has("defer-search"),
+  file, type: flag("type") as any, limit, batchSize: Number(flag("batch")) || undefined, deferSearch: has("defer-search"), deferIndexes: has("defer-indexes"),
   logDir: fs.mkdtempSync(path.join(os.tmpdir(), "bench-logs-")),
   progressEveryMs: 10_000,
   profile: has("profile"),
@@ -121,6 +121,7 @@ const report = {
   records: { processed: r.processed, created: r.created, updated: r.updated, unchanged: r.unchanged, failed: r.failed },
   unresolved: unresolvedCounts(db),
   elapsedSeconds: +seconds.toFixed(2), recordsPerSecond: Math.round(r.processed / seconds),
+  indexMode: r.indexMode, indexRebuildSeconds: +(r.indexes.rebuildMs / 1000).toFixed(2), indexesDeferred: r.indexes.dropped.length,
   reindexSeconds: reindexMs != null ? +(reindexMs / 1000).toFixed(2) : null,
   totalWithReindexSeconds: +((importMs + (reindexMs ?? 0)) / 1000).toFixed(2),
   phasesSeconds: Object.fromEntries(Object.entries({ ...r.timings, writer: undefined }).filter(([, v]) => typeof v === "number").map(([k, v]) => [k, +((v as number) / 1000).toFixed(2)])),

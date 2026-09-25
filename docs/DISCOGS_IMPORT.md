@@ -250,6 +250,34 @@ slowdown beyond 50k real rows hasn't been measured.
      `release_tracks.parent_track_id` and `release_extra_artists.track_id` without an index. Every
      deleted track scanned both tables.
 
+6. **Statement-level profiling on the Mac found the real cause** (`--profile`).
+
+   | Rows (cost per row) | 1st interval | 3rd interval |
+   |---|---|---|
+   | Tracks | 3.2 µs | 3.5 µs (flat) |
+   | Company credits | 2.9 µs | 10.2 µs |
+   | Identifiers | 2.7 µs | 7.2 µs |
+   | Releases | 10.3 µs | 23.7 µs |
+   | Commit + other, per interval | 2.1 s | 3.6 s |
+
+   Tables whose indexes follow release order (tracks) stay flat. Tables with secondary indexes on
+   scattered values (artist, label, company and master IDs, names, codes, unresolved references)
+   get steadily more expensive. Each batch dirties thousands of distinct index pages, and all of
+   them are written at commit. This is also why a bigger read cache didn't help.
+7. **Bulk-load mode** (`--defer-indexes`, or `--bulk` for indexes and search together; migration 008):
+   - The 36 secondary indexes on scattered values are dropped for the load and rebuilt once at the
+     end.
+   - Their definitions are saved first in `deferred_indexes`, so an interrupted load is always
+     recoverable: the next normal import restores them before writing, or run
+     `catalog indexes:restore`.
+   - Tests prove the resulting catalog, links, search results and index definitions are identical.
+   - Build environment, 300k synthetic releases with a realistic ID spread:
+
+     | Mode | Write time | Total run | Rate |
+     |---|---|---|---|
+     | Maintained indexes | 124 s | 178 s | ~1,690/s |
+     | Bulk mode | 66 s | 137 s (includes 6.7 s index rebuild and 10 s search rebuild) | steady ~2,550/s |
+
 The tuned-cache run, for reference:
 
 ```bash
