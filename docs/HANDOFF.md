@@ -56,7 +56,9 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
   - about 3 h 35 min with `--bulk`, 73 GB.
 
   It revealed Discogs's "0 = no reference" convention and its placeholder artists, both now
-  handled (migration 009). The exact download link
+  handled (migration 009). After the repair, genuinely unresolved references are small: 160 master
+  links, 33 artist credits, and 109k label parents pointing at a label missing from the dump. There
+  are 0 inconsistent links. The exact download link
   host (data.discogs.com or S3) is still unconfirmed; the file naming and year folders are
   confirmed.
 - No browser walkthrough or screenshots were produced for the latest milestone.
@@ -91,8 +93,8 @@ before any hosting.**
 
 ## Suggested next steps
 
-1. Apply migration 009 to the full database, then measure and improve search latency on the full
-   catalog (prefix and short terms).
+1. Measure and improve search latency on the full catalog (prefix and short terms). Then browse the
+   full catalog in the app (`DATABASE_PATH=data/catalog-full.db npm run dev`).
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.

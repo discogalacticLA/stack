@@ -224,12 +224,25 @@ Where the releases time went:
      (1,304,596 release credits), 355 "Unknown Artist" (82,792) and 118760 "No Artist" (18,769).
      They are stored as name-only credits, and are now reported as `placeholder_artist_credits`
      instead of unresolved references.
-- **Genuinely unresolved after the fixes (estimated from the counts):**
-  - about 160 master links;
-  - about 33 release-artist credits;
-  - 162 release labels and 33 series;
-  - 109,298 label parents, of which 109,093 point at label 212, which isn't in the labels dump;
-  - smaller numbers of other credits, aliases and members.
+- **Measured after migration 009 plus a full reconcile (owner's Mac):**
+
+  | Reference | Before | After |
+  |---|---|---|
+  | Master links | 7,790,538 | **160** |
+  | Release-artist credits | 1,406,190 | **33** |
+  | Extra-artist credits | 184,862 | **59,159** |
+  | Track-artist credits | 368,379 | **131** |
+  | Master-artist credits | 168,502 | **0** |
+  | Release labels | 162 | 162 |
+  | Series | 33 | 33 |
+  | Artist aliases | 29,950 | 29,950 |
+  | Artist members | 6,608 | 6,608 |
+  | Label parents | 109,298 | 109,298 (109,093 of them point at label 212, which isn't in the labels dump) |
+  | Masters' main release | 128 | 128 |
+  | `placeholder_artist_credits` (new line) | — | 2,064,792 |
+
+  Inconsistent ID/FK pairs: 0. What remains points at entities missing from the dumps
+  (deleted or merged on Discogs). It's not an import error.
 - **Heads-up for the next monthly update:** records from the old parser were hashed with the 0
   IDs. The ~7.8M releases without a master will therefore look "changed" once and be rewritten.
   Run that month's update with `--bulk`.
