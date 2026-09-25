@@ -51,6 +51,8 @@ If the project is split later, `routes` + `views` map to `apps/web`, and `servic
   - `release_identifiers`, `release_genres`, `release_styles`
 - `catalog_sources`, `external_identifiers`, `catalog_provenance`, `catalog_import_runs` and `catalog_import_errors`
 - `catalog_search` (FTS5, rowid = type code · 2^40 + id)
+- `search_index_state` (migration 004): whether the search index is behind the catalog, e.g. after
+  a `--defer-search` bulk import. Kept outside the search backend, so it works with any backend.
 
 The Discogs IDs are stored directly as unique nullable columns (`discogs_artist_id`,
 `discogs_label_id`, `discogs_master_id`, `discogs_release_id`). They are also recorded in
@@ -91,6 +93,8 @@ reference to a Discogs entity that isn't imported yet is stored as NULL plus its
   prints them only to the local operator.
 
 ## Path to PostgreSQL
+
+The detailed audit is in [POSTGRES_READINESS.md](POSTGRES_READINESS.md).
 
 SQLite is right for a local prototype. It is the wrong choice for a hosted multi-user service
 with an ~18M-release catalog. Before any hosting:

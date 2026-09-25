@@ -57,9 +57,11 @@ npm run catalog -- import tests/fixtures/discogs/masters.xml.gz  --type masters
 npm run catalog -- import tests/fixtures/discogs/releases.xml.gz --type releases
 npm run catalog -- status
 
-# A real monthly dump (large: see docs/DISCOGS_IMPORT.md first):
-npm run catalog -- download --date 20260901
-npm run catalog -- import-all data/discogs-dumps --date 20260901
+# A real monthly dump (large: see docs/DISCOGS_IMPORT.md first). Copy the exact links from
+# https://data.discogs.com/ (the old S3 URL pattern now returns 403):
+npm run catalog -- download --url "<CHECKSUM.txt link>" --url "<releases.xml.gz link>"
+npm run catalog -- census data/discogs-dumps/discogs_YYYYMMDD_releases.xml.gz --limit 50000
+npm run catalog -- import-all data/discogs-dumps --date YYYYMMDD --defer-search
 ```
 
 Imports upsert by Discogs ID. They never truncate the catalog, can be resumed
@@ -71,6 +73,8 @@ Imports upsert by Discogs ID. They never truncate the catalog, can be resumed
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): stack, data model, modules, security, path to Postgres
 - [docs/IMPORTS.md](docs/IMPORTS.md): Discogs CSV / Rekordbox XML collection imports
 - [docs/DISCOGS_IMPORT.md](docs/DISCOGS_IMPORT.md): Discogs monthly dump importer
+- [docs/DISCOGS_FORMAT_COVERAGE.md](docs/DISCOGS_FORMAT_COVERAGE.md): which dump elements are imported or ignored
+- [docs/POSTGRES_READINESS.md](docs/POSTGRES_READINESS.md): what moving the catalog to PostgreSQL involves
 - [docs/HANDOFF.md](docs/HANDOFF.md): current state, open decisions, next steps
 
 ## Data and rights

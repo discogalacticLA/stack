@@ -11,7 +11,7 @@
 import crypto from "node:crypto";
 import type { DB } from "../../../db/index.js";
 import { normalizeCode, normalizeName } from "../../catalog-api/normalize.js";
-import { searchBackend, type SearchDocument } from "../../search/index.js";
+import { searchBackend, type SearchBackend, type SearchDocument } from "../../search/index.js";
 import { joinText, releasePrimary, type ArtistRecord, type Credit, type LabelRecord, type MasterRecord, type ReleaseRecord, type TrackRecord } from "./normalize.js";
 
 export interface BatchResult {
@@ -47,11 +47,43 @@ function lookup(db: DB, table: string, col: string, ids: (number | null)[], extr
   return out;
 }
 
+/** Milliseconds spent per phase inside the writer (for benchmarking; see docs/DISCOGS_IMPORT.md). */
+export interface WriterTimings { lookup: number; hash: number; provenance: number; search: number; total: number }
+
+export interface WriterOptions {
+  /**
+   * Where search documents go. `null` = deferred: no documents are built or written during the
+   * import, and the caller rebuilds the index afterwards with `reindexAll()`. Any SearchBackend
+   * works (SQLite FTS today, Postgres/OpenSearch later).
+   */
+  search?: SearchBackend | null;
+}
+
 export class DiscogsCatalogWriter {
   private sourceId: number;
   private stmts: Record<string, any> = {};
-  constructor(private db: DB, private runId: number, private now: () => string) {
+  private search: SearchBackend | null;
+  readonly timings: WriterTimings = { lookup: 0, hash: 0, provenance: 0, search: 0, total: 0 };
+  constructor(private db: DB, private runId: number, private now: () => string, opts: WriterOptions = {}) {
     this.sourceId = (db.prepare("SELECT id FROM catalog_sources WHERE name = 'discogs'").get() as { id: number }).id;
+    this.search = opts.search === undefined ? searchBackend(db) : opts.search;
+  }
+
+  private timed<T>(phase: keyof WriterTimings, fn: () => T): T {
+    const t = performance.now();
+    try { return fn(); } finally { this.timings[phase] += performance.now() - t; }
+  }
+
+  private lookup(table: string, col: string, ids: (number | null)[], extra = "") {
+    return this.timed("lookup", () => lookup(this.db, table, col, ids, extra));
+  }
+
+  private hash(v: unknown) {
+    return this.timed("hash", () => hashOf(v));
+  }
+
+  private index(docs: SearchDocument[] | null) {
+    if (docs && this.search) this.timed("search", () => this.search!.upsert(docs));
   }
 
   private st(sql: string) {
@@ -59,6 +91,10 @@ export class DiscogsCatalogWriter {
   }
 
   private provenance(entity: string, ids: number[]): Map<number, string> {
+    return this.timed("provenance", () => this.provenanceLookup(entity, ids));
+  }
+
+  private provenanceLookup(entity: string, ids: number[]): Map<number, string> {
     const out = new Map<number, string>();
     for (let i = 0; i < ids.length; i += 500) {
       const part = ids.slice(i, i + 500);
@@ -69,13 +105,17 @@ export class DiscogsCatalogWriter {
   }
 
   private touch(entity: string, id: number, hash: string, now: string) {
+    const t = performance.now();
     this.st(`INSERT INTO catalog_provenance (entity_type, entity_id, source_id, content_hash, import_run_id, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (entity_type, entity_id, source_id) DO UPDATE SET content_hash = excluded.content_hash, import_run_id = excluded.import_run_id, last_seen_at = excluded.last_seen_at`)
       .run(entity, id, this.sourceId, hash, this.runId, now, now);
+    this.timings.provenance += performance.now() - t;
   }
 
   private externalId(entity: string, id: number, ext: number, now: string) {
+    const t = performance.now();
     this.st("INSERT OR IGNORE INTO external_identifiers (entity_type, entity_id, source_id, external_id, created_at) VALUES (?, ?, ?, ?, ?)").run(entity, id, this.sourceId, String(ext), now);
+    this.timings.provenance += performance.now() - t;
   }
 
   /** Decides what to do with a record; returns the internal id when it should be written. */
@@ -96,15 +136,19 @@ export class DiscogsCatalogWriter {
 
   // ───────────────────────── Artists ─────────────────────────
   writeArtists(input: ArtistRecord[]): BatchResult {
+    return this.timed("total", () => this.writeArtistsBatch(input));
+  }
+
+  private writeArtistsBatch(input: ArtistRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
     const now = this.now();
-    const existing = lookup(this.db, "artists", "discogs_artist_id", records.map((r) => r.discogs_id), ", local_edited_at");
+    const existing = this.lookup("artists", "discogs_artist_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("artist", [...existing.values()].map((e) => e.id));
-    const refs = lookup(this.db, "artists", "discogs_artist_id", records.flatMap((r) => [...r.aliases, ...r.members].map((x) => x.discogs_id)));
-    const docs: SearchDocument[] = [];
+    const refs = this.lookup("artists", "discogs_artist_id", records.flatMap((r) => [...r.aliases, ...r.members].map((x) => x.discogs_id)));
+    const docs: SearchDocument[] | null = this.search ? [] : null;
     for (const r of records) {
-      const hash = hashOf(r);
+      const hash = this.hash(r);
       const ex = existing.get(r.discogs_id);
       const action = this.classify("artist", ex, prov.get(ex?.id), hash, r.discogs_id, res, now);
       res.lastExternalId = String(r.discogs_id);
@@ -135,23 +179,27 @@ export class DiscogsCatalogWriter {
         this.st("INSERT INTO artist_members (group_artist_id, member_artist_id, discogs_member_id, name) VALUES (?, ?, ?, ?)").run(id, memberId, m.discogs_id, m.name);
       }
       this.touch("artist", id, hash, now);
-      docs.push({ type: "artist", id, title: r.name, people: [r.real_name, ...r.name_variations, ...r.aliases.map((a) => a.name)].filter(Boolean).join(" ") });
+      docs?.push({ type: "artist", id, title: r.name, people: [r.real_name, ...r.name_variations, ...r.aliases.map((a) => a.name)].filter(Boolean).join(" ") });
     }
-    searchBackend(this.db).upsert(docs);
+    this.index(docs);
     return res;
   }
 
   // ───────────────────────── Labels ─────────────────────────
   writeLabels(input: LabelRecord[]): BatchResult {
+    return this.timed("total", () => this.writeLabelsBatch(input));
+  }
+
+  private writeLabelsBatch(input: LabelRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
     const now = this.now();
-    const existing = lookup(this.db, "labels", "discogs_label_id", records.map((r) => r.discogs_id), ", local_edited_at");
+    const existing = this.lookup("labels", "discogs_label_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("label", [...existing.values()].map((e) => e.id));
-    const parents = lookup(this.db, "labels", "discogs_label_id", records.map((r) => r.parent_discogs_id));
-    const docs: SearchDocument[] = [];
+    const parents = this.lookup("labels", "discogs_label_id", records.map((r) => r.parent_discogs_id));
+    const docs: SearchDocument[] | null = this.search ? [] : null;
     for (const r of records) {
-      const hash = hashOf(r);
+      const hash = this.hash(r);
       const ex = existing.get(r.discogs_id);
       const action = this.classify("label", ex, prov.get(ex?.id), hash, r.discogs_id, res, now);
       res.lastExternalId = String(r.discogs_id);
@@ -171,24 +219,28 @@ export class DiscogsCatalogWriter {
         res.updated++;
       }
       this.touch("label", id, hash, now);
-      docs.push({ type: "label", id, title: r.name });
+      docs?.push({ type: "label", id, title: r.name });
     }
-    searchBackend(this.db).upsert(docs);
+    this.index(docs);
     return res;
   }
 
   // ───────────────────────── Masters ─────────────────────────
   writeMasters(input: MasterRecord[]): BatchResult {
+    return this.timed("total", () => this.writeMastersBatch(input));
+  }
+
+  private writeMastersBatch(input: MasterRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
     const now = this.now();
-    const existing = lookup(this.db, "masters", "discogs_master_id", records.map((r) => r.discogs_id), ", local_edited_at");
+    const existing = this.lookup("masters", "discogs_master_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("master", [...existing.values()].map((e) => e.id));
-    const artists = lookup(this.db, "artists", "discogs_artist_id", records.flatMap((r) => r.artists.map((a) => a.discogs_artist_id)));
-    const mains = lookup(this.db, "releases", "discogs_release_id", records.map((r) => r.main_release_discogs_id));
-    const docs: SearchDocument[] = [];
+    const artists = this.lookup("artists", "discogs_artist_id", records.flatMap((r) => r.artists.map((a) => a.discogs_artist_id)));
+    const mains = this.lookup("releases", "discogs_release_id", records.map((r) => r.main_release_discogs_id));
+    const docs: SearchDocument[] | null = this.search ? [] : null;
     for (const r of records) {
-      const hash = hashOf(r);
+      const hash = this.hash(r);
       const ex = existing.get(r.discogs_id);
       const action = this.classify("master", ex, prov.get(ex?.id), hash, r.discogs_id, res, now);
       res.lastExternalId = String(r.discogs_id);
@@ -202,7 +254,7 @@ export class DiscogsCatalogWriter {
         res.created++;
       } else {
         id = ex.id;
-        this.st("UPDATE masters SET title = ?, normalized_title = ?, year = ?, main_release_discogs_id = ?, main_release_id = COALESCE(?, main_release_id), data_quality = ?, notes = ?, updated_at = ? WHERE id = ?")
+        this.st("UPDATE masters SET title = ?, normalized_title = ?, year = ?, main_release_discogs_id = ?, main_release_id = ?, data_quality = ?, notes = ?, updated_at = ? WHERE id = ?")
           .run(r.title, r.normalized_title, r.year, r.main_release_discogs_id, mainId, r.data_quality, r.notes, now, id);
         for (const t of ["master_artists", "master_genres", "master_styles"]) this.st(`DELETE FROM ${t} WHERE master_id = ?`).run(id);
         res.updated++;
@@ -216,25 +268,29 @@ export class DiscogsCatalogWriter {
       for (const g of r.genres) this.st("INSERT INTO master_genres (master_id, genre) VALUES (?, ?)").run(id, g);
       for (const s of r.styles) this.st("INSERT INTO master_styles (master_id, style) VALUES (?, ?)").run(id, s);
       this.touch("master", id, hash, now);
-      docs.push({ type: "master", id, title: r.title, people: creditLine(r.artists), extra: r.year ? String(r.year) : "" });
+      docs?.push({ type: "master", id, title: r.title, people: creditLine(r.artists), extra: r.year ? String(r.year) : "" });
     }
-    searchBackend(this.db).upsert(docs);
+    this.index(docs);
     return res;
   }
 
   // ───────────────────────── Releases ─────────────────────────
   writeReleases(input: ReleaseRecord[]): BatchResult {
+    return this.timed("total", () => this.writeReleasesBatch(input));
+  }
+
+  private writeReleasesBatch(input: ReleaseRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
     const now = this.now();
-    const existing = lookup(this.db, "releases", "discogs_release_id", records.map((r) => r.discogs_id), ", local_edited_at");
+    const existing = this.lookup("releases", "discogs_release_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("release", [...existing.values()].map((e) => e.id));
     const allCredits = (r: ReleaseRecord) => [...r.artists, ...r.extra_artists, ...flatTracks(r.tracks).flatMap((t) => [...t.artists, ...t.extra_artists])];
-    const artists = lookup(this.db, "artists", "discogs_artist_id", records.flatMap((r) => allCredits(r).map((a) => a.discogs_artist_id)));
-    const labels = lookup(this.db, "labels", "discogs_label_id", records.flatMap((r) => r.labels.map((l) => l.discogs_id)));
-    const masters = lookup(this.db, "masters", "discogs_master_id", records.map((r) => r.master_discogs_id));
-    const companies = lookup(this.db, "companies", "discogs_company_id", records.flatMap((r) => r.companies.map((c) => c.discogs_id)));
-    const docs: SearchDocument[] = [];
+    const artists = this.lookup("artists", "discogs_artist_id", records.flatMap((r) => allCredits(r).map((a) => a.discogs_artist_id)));
+    const labels = this.lookup("labels", "discogs_label_id", records.flatMap((r) => r.labels.map((l) => l.discogs_id)));
+    const masters = this.lookup("masters", "discogs_master_id", records.map((r) => r.master_discogs_id));
+    const companies = this.lookup("companies", "discogs_company_id", records.flatMap((r) => r.companies.map((c) => c.discogs_id)));
+    const docs: SearchDocument[] | null = this.search ? [] : null;
     const artistRef = (a: Credit) => {
       const id = a.discogs_artist_id != null ? artists.get(a.discogs_artist_id)?.id ?? null : null;
       if (a.discogs_artist_id != null && id == null) res.unresolved++;
@@ -242,7 +298,7 @@ export class DiscogsCatalogWriter {
     };
 
     for (const r of records) {
-      const hash = hashOf(r);
+      const hash = this.hash(r);
       const ex = existing.get(r.discogs_id);
       const action = this.classify("release", ex, prov.get(ex?.id), hash, r.discogs_id, res, now);
       res.lastExternalId = String(r.discogs_id);
@@ -262,7 +318,7 @@ export class DiscogsCatalogWriter {
         res.created++;
       } else {
         id = ex.id;
-        this.st(`UPDATE releases SET master_id = COALESCE(?, master_id), discogs_master_id = ?, title = ?, normalized_title = ?, year = ?, released_date = ?, country = ?, status = ?,
+        this.st(`UPDATE releases SET master_id = ?, discogs_master_id = ?, title = ?, normalized_title = ?, year = ?, released_date = ?, country = ?, status = ?,
             notes = ?, data_quality = ?, label_id = ?, catalog_number = ?, catalog_number_norm = ?, format = ?, format_details = ?, updated_at = ? WHERE id = ?`).run(...vals, now, id);
         for (const t of ["release_artists", "release_extra_artists", "release_labels", "release_companies", "release_formats", "release_tracks", "release_identifiers", "release_genres", "release_styles"]) {
           this.st(`DELETE FROM ${t} WHERE release_id = ?`).run(id);
@@ -316,12 +372,13 @@ export class DiscogsCatalogWriter {
         this.st("INSERT INTO release_media_links (release_id, provider, external_id, title, source_id, created_at) VALUES (?, 'youtube', ?, ?, ?, ?)").run(id, v.youtube_id, v.title, this.sourceId, now);
       }
       this.touch("release", id, hash, now);
+      if (!docs) continue;
       const codes = new Set<string>();
       for (const l of r.labels) if (l.catno) { codes.add(l.catno); const n = normalizeCode(l.catno); if (n) codes.add(n); }
       for (const i of r.identifiers) if (["Barcode", "Matrix / Runout", "Label Code"].includes(i.type)) { codes.add(i.value); const n = normalizeCode(i.value); if (n) codes.add(n); }
       docs.push({ type: "release", id, title: r.title, people: creditLine(r.artists), codes: [...codes].join(" "), extra: [r.labels.map((l) => l.name).join(" "), r.year, r.country, primary.format].filter(Boolean).join(" ") });
     }
-    searchBackend(this.db).upsert(docs);
+    this.index(docs);
     return res;
   }
 }
@@ -341,6 +398,11 @@ function creditLine(cs: Credit[]): string {
 export function reconcileReferences(db: DB): Record<string, number> {
   const run = (sql: string) => db.prepare(sql).run().changes;
   return db.transaction(() => ({
+    // Repair first: an internal link that no longer matches its Discogs id is cleared, so the
+    // resolve steps below can link it to the right entity (or leave it NULL until it's imported).
+    // Only Discogs-sourced rows without local edits are touched. Heals rows written before the
+    // writer stopped using COALESCE(?, fk) on these pairs.
+    ...repairStaleReferences(db),
     release_master: run(`UPDATE releases SET master_id = (SELECT m.id FROM masters m WHERE m.discogs_master_id = releases.discogs_master_id)
       WHERE master_id IS NULL AND discogs_master_id IS NOT NULL AND EXISTS (SELECT 1 FROM masters m WHERE m.discogs_master_id = releases.discogs_master_id)`),
     master_main_release: run(`UPDATE masters SET main_release_id = (SELECT r.id FROM releases r WHERE r.discogs_release_id = masters.main_release_discogs_id)
@@ -359,6 +421,38 @@ export function reconcileReferences(db: DB): Record<string, number> {
     artist_members: run(`UPDATE artist_members SET member_artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = artist_members.discogs_member_id)
       WHERE member_artist_id IS NULL AND discogs_member_id IS NOT NULL AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = artist_members.discogs_member_id)`),
   }))();
+}
+
+/**
+ * Every paired (Discogs id, internal FK) column must agree: the FK is either NULL or the internal id
+ * of the entity carrying that Discogs id. These are the only pairs stored on parent rows; child
+ * tables (credits, labels, aliases, members) are deleted and rewritten on every update.
+ */
+const STALE_PAIRS = {
+  stale_release_master: {
+    where: `releases.discogs_release_id IS NOT NULL AND releases.local_edited_at IS NULL AND releases.master_id IS NOT NULL
+      AND (releases.discogs_master_id IS NULL OR NOT EXISTS (SELECT 1 FROM masters m WHERE m.id = releases.master_id AND m.discogs_master_id = releases.discogs_master_id))`,
+    table: "releases", fk: "master_id",
+  },
+  stale_master_main_release: {
+    where: `masters.discogs_master_id IS NOT NULL AND masters.local_edited_at IS NULL AND masters.main_release_id IS NOT NULL
+      AND (masters.main_release_discogs_id IS NULL OR NOT EXISTS (SELECT 1 FROM releases r WHERE r.id = masters.main_release_id AND r.discogs_release_id = masters.main_release_discogs_id))`,
+    table: "masters", fk: "main_release_id",
+  },
+  stale_label_parent: {
+    where: `labels.discogs_label_id IS NOT NULL AND labels.local_edited_at IS NULL AND labels.parent_label_id IS NOT NULL
+      AND (labels.parent_discogs_label_id IS NULL OR NOT EXISTS (SELECT 1 FROM labels p WHERE p.id = labels.parent_label_id AND p.discogs_label_id = labels.parent_discogs_label_id))`,
+    table: "labels", fk: "parent_label_id",
+  },
+} as const;
+
+function repairStaleReferences(db: DB): Record<string, number> {
+  return Object.fromEntries(Object.entries(STALE_PAIRS).map(([k, p]) => [k, db.prepare(`UPDATE ${p.table} SET ${p.fk} = NULL WHERE ${p.where}`).run().changes]));
+}
+
+/** Rows whose internal FK disagrees with their Discogs id (should always be 0). */
+export function staleReferenceCounts(db: DB): Record<string, number> {
+  return Object.fromEntries(Object.entries(STALE_PAIRS).map(([k, p]) => [k, (db.prepare(`SELECT COUNT(*) AS n FROM ${p.table} WHERE ${p.where}`).get() as { n: number }).n]));
 }
 
 /** Counts rows that still point at entities not present in the catalog (by Discogs id). */

@@ -141,5 +141,25 @@ export function reindexAll(db: DB, backend: SearchBackend = searchBackend(db), b
   each("labels", labelDocuments);
   each("masters", masterDocuments);
   each("releases", releaseDocuments);
+  if (hasStateTable(db)) {
+    db.prepare("UPDATE search_index_state SET stale_since = NULL, stale_reason = NULL, last_rebuilt_at = ?, documents = ? WHERE name = 'catalog'").run(new Date().toISOString(), n);
+  }
   return n;
+}
+
+// ───────────────────────── Index freshness ─────────────────────────
+// Backend-agnostic bookkeeping kept with the catalog tables: whichever SearchBackend is in use, the
+// catalog is authoritative and `reindexAll` rebuilds the index from it.
+
+const hasStateTable = (db: DB) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_index_state'").get();
+
+export interface SearchIndexState { stale_since: string | null; stale_reason: string | null; last_rebuilt_at: string | null; documents: number | null }
+
+/** Records that catalog rows were written without updating the search index (bulk import mode). */
+export function markSearchStale(db: DB, reason: string, at = new Date().toISOString()) {
+  db.prepare("UPDATE search_index_state SET stale_since = COALESCE(stale_since, ?), stale_reason = ? WHERE name = 'catalog'").run(at, reason);
+}
+
+export function searchIndexState(db: DB): SearchIndexState {
+  return db.prepare("SELECT stale_since, stale_reason, last_rebuilt_at, documents FROM search_index_state WHERE name = 'catalog'").get() as SearchIndexState;
 }

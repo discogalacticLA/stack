@@ -6,7 +6,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 - Local prototype only. It is not production-ready and not deployed, and it has no real payments.
 - Branch `claude/music-archive-marketplace-ibxhs3` in the `stack` repo.
-- `npm run check` runs the typecheck and 107 vitest tests across 7 files, all passing at the time
+- `npm run check` runs the typecheck and 128 vitest tests across 9 files, all passing at the time
   of writing.
 
 ## Milestones done
@@ -19,6 +19,15 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
    provenance and import runs, FTS search), the streaming Discogs dump importer and CLI, and the
    catalog API (`/api/v1/*`). Artist, label and company pages. See
    [DISCOGS_IMPORT.md](DISCOGS_IMPORT.md).
+
+4. **Catalog hardening** (this milestone):
+   - Fixed a stale-relationship bug: an old internal master or main-release link survived a
+     Discogs change to an unimported entity. Reconcile now also repairs rows damaged earlier.
+   - `--defer-search` bulk mode, with backend-neutral search-freshness state (migration 004).
+   - A hardened `download`: `.part` files, Content-Length and sha256 checks, sidecars, `--url`,
+     and a host allow-list.
+   - XML `census` coverage audit, benchmark tooling and a synthetic realistic-shape generator.
+   - Docs: [POSTGRES_READINESS.md](POSTGRES_READINESS.md), [DISCOGS_FORMAT_COVERAGE.md](DISCOGS_FORMAT_COVERAGE.md).
 
 ## Key decisions already made
 
@@ -35,8 +44,10 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 - **Real Discogs CSV exports and real Rekordbox XML exports.** The mappings were built from
   community references and synthetic fixtures. The official docs were unreachable from the build
   environment.
-- **Real Discogs dumps.** Their size, speed, exact element variants and the S3 URL pattern used by
-  `catalog download` are all untested.
+- **Real Discogs dumps.** Not yet read. data.discogs.com was blocked in the build environment, and
+  the historical S3 location returns 403. The download URL structure is therefore unverified;
+  use `download --url` with links copied from data.discogs.com. All benchmarks so far use synthetic
+  data.
 - No browser walkthrough or screenshots were produced for the latest milestone.
 
 ## Decisions needed (from the owner)
@@ -49,9 +60,16 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
    XML to test. These can be private, and would be tested locally only.
 5. Anything involving **live payments, paid accounts or public deployment**.
 
+## Full-import gate
+
+Recommendation: **B.** Move catalog storage to PostgreSQL before loading the complete catalog.
+Meanwhile, keep validating real samples (up to about 1M releases) on SQLite. The reasoning, from
+synthetic measurements, is in DISCOGS_IMPORT.md → Benchmarks and in POSTGRES_READINESS.md.
+
 ## Suggested next steps
 
-1. Run a `--limit 50000` slice of a real releases dump, then compare field coverage and speed.
+1. On a machine that can reach data.discogs.com, run the census and the 50k benchmark on the real
+   files (commands in DISCOGS_IMPORT.md). Record the results in DISCOGS_FORMAT_COVERAGE.md.
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.

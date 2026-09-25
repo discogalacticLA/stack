@@ -59,43 +59,156 @@ double-applies anything. Upserts are idempotent anyway.
 ## Commands
 
 ```bash
-npm run catalog -- import <file.xml[.gz]> [--type releases] [--batch 1000] [--limit N] [--checksum CHECKSUM.txt]
-npm run catalog -- import-all data/discogs-dumps [--date 20260901]
-npm run catalog -- status [runId]
+npm run catalog -- import <file.xml[.gz]> [--type releases] [--batch 1000] [--limit N] [--checksum CHECKSUM.txt] [--defer-search]
+npm run catalog -- import-all data/discogs-dumps [--date 20260901] [--defer-search]
+npm run catalog -- status [runId]          # also shows whether the search index is stale
 npm run catalog -- errors <runId> [--limit 50]
-npm run catalog -- resume <runId>
+npm run catalog -- resume <runId>          # keeps the run's search mode
 npm run catalog -- cancel <runId>          # mark an interrupted 'running' run as cancelled (resumable)
-npm run catalog -- reconcile
+npm run catalog -- reconcile               # also reports inconsistent id/FK pairs (should be 0)
 npm run catalog -- search:reindex
 npm run catalog -- verify <file> --checksum <CHECKSUM.txt>
-npm run catalog -- download --date YYYYMMDD [--types artists,labels,masters,releases] [--dir data/discogs-dumps]
+npm run catalog -- census <file> [--type releases] [--limit 50000] [--json out.json]
+npm run catalog -- download --url <link> [--url <link> …] [--dir data/discogs-dumps]
+npm run catalog -- download --date YYYYMMDD [--types artists,labels,masters,releases] [--base URL]
 ```
 
 `--limit N` imports N records and stops. The run is left `cancelled`, and `resume` continues it.
-It's useful for trying a real dump on a small slice.
 
-## Importing a real dump
+### Search modes
 
-1. Check the latest dump date and file names at <https://data.discogs.com/>.
-   The `download` command builds URLs as
-   `https://discogs-data-dumps.s3.us-west-2.amazonaws.com/data/YYYY/discogs_YYYYMMDD_<type>.xml.gz`.
-   **That pattern could not be verified from the build environment.** If it has changed, download
-   the files by hand into `data/discogs-dumps/`, or pass `--base <url>`.
-2. Download: `npm run catalog -- download --date 20260901`
-3. Verify: `npm run catalog -- verify data/discogs-dumps/discogs_20260901_releases.xml.gz --checksum data/discogs-dumps/discogs_20260901_CHECKSUM.txt`
-4. Try a slice first: `npm run catalog -- import data/discogs-dumps/discogs_20260901_releases.xml.gz --limit 50000`
-5. Full import: `npm run catalog -- import-all data/discogs-dumps --date 20260901`
-6. If it stops for any reason: `npm run catalog -- status`, then `npm run catalog -- resume <runId>`.
+- **Default (incremental).** Every batch updates the search index. Use this for monthly updates.
+- **`--defer-search` (bulk load).**
+  - Catalog rows are written without search-index updates. The catalog tables stay authoritative.
+  - The index is marked stale (`search_index_state`), and `status` says so.
+  - `import-all --defer-search` reconciles references and rebuilds the index **once** after all
+    runs finish.
+  - After a single `import --defer-search`, run `search:reindex` yourself.
+  - A deferred run that is interrupted leaves the stale mark set, and its resume stays deferred.
+  - The mode works through the `SearchBackend` interface only, so a future Postgres or
+    OpenSearch backend behaves the same.
 
-**Disk and time.** The compressed releases dump alone is many GB, and it holds tens of millions of
-records. On a synthetic dump of 20,000 simple releases in this environment:
-- the first import ran at about 6,000 records per second;
-- an unchanged re-run ran at about 14,000 records per second;
-- the database grew by about 1.3 KB per release, including the search index.
+Measured effect (below): search writes are only ~1–2% of import time at 50k–300k records, so
+deferring saves little at this scale. It exists for the first full load, when index merges grow.
 
-Real releases have longer tracklists and more credits, so expect several hours and a very large
-SQLite file (well over 100 GB for everything). This has **not been measured on a real dump**. For
-the full catalog, the PostgreSQL path in ARCHITECTURE.md is recommended.
+### Relationship consistency
+
+Paired columns always agree:
+- `releases.discogs_master_id` / `master_id`
+- `masters.main_release_discogs_id` / `main_release_id`
+- `labels.parent_discogs_label_id` / `parent_label_id`
+
+When Discogs changes or removes a relationship, the internal link is replaced or cleared, **never
+kept**. If the new target isn't imported yet, the link is `NULL` until reconciliation connects it.
+Every reconcile first repairs any row whose link disagrees with its Discogs ID (rows with local
+edits are left alone). `staleReferenceCounts()` must be 0.
+
+## Downloading dumps
+
+**Status (2026-09-25): the download location is NOT verified.**
+
+- `https://data.discogs.com/` is the official dump page. The build environment's network policy
+  blocked it.
+- The historical direct-S3 location
+  (`https://discogs-data-dumps.s3.us-west-2.amazonaws.com/data/YYYY/discogs_YYYYMMDD_<type>.xml.gz`)
+  returns **403 AccessDenied** for every key tried, 2023–2026 and including `index.html`. A Discogs
+  forum thread from 2026 reports the same, with users pointed to data.discogs.com.
+
+So:
+1. Open https://data.discogs.com/ in a browser. Note the latest dump date and copy the exact links.
+2. `npm run catalog -- download --url "<CHECKSUM link>" --url "<labels link>"` (repeat `--url` as needed).
+   `--date` with `--base <url>` (or `DISCOGS_DUMP_BASE_URL`) also works if the links follow
+   `{base}/{YYYY}/discogs_{date}_{type}.xml.gz`.
+
+What the download command guarantees (all tested):
+- It streams to `<name>.part` and renames only after the byte count matches `Content-Length` (when
+  sent) and the sha256 matches CHECKSUM.txt (when downloaded alongside). A truncated or
+  interrupted file never gets the real name.
+- A checksum mismatch saves the file as `<name>.corrupt` and stops with both hashes.
+- Verified files get a `<name>.sha256` sidecar. They're skipped on later runs without re-hashing.
+- An existing file that fails verification is set aside as `.corrupt` and downloaded again.
+- CHECKSUM.txt is re-fetched each time. A failed re-fetch keeps the old copy.
+- Only `https` on `*.discogs.com` or the `discogs-data-dumps` S3 bucket is accepted, redirects
+  included. Local file names must be official dump names, since no path from a URL is trusted.
+- HTTP 403 or 404 explains what to do next. Content-Length is reported.
+
+Behind a proxy, Node's `fetch` ignores `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set (Node 22+).
+
+## Importing a real dump (validation first)
+
+```bash
+# 1. Structure audit (reads only)
+npm run catalog -- census data/discogs-dumps/discogs_YYYYMMDD_releases.xml.gz --limit 50000 --json data/census-releases.json
+# 2. Benchmark a 50k slice into a throwaway DB, both search modes
+npx tsx scripts/benchmark-import.ts --file data/discogs-dumps/discogs_YYYYMMDD_releases.xml.gz --limit 50000 --db data/bench-inc.db --out data/bench-inc.json
+npx tsx scripts/benchmark-import.ts --file data/discogs-dumps/discogs_YYYYMMDD_releases.xml.gz --limit 50000 --db data/bench-def.db --defer-search --out data/bench-def.json
+# 3. Only then, into the working DB
+npm run catalog -- import-all data/discogs-dumps --date YYYYMMDD --defer-search
+```
+
+## Benchmarks
+
+**All numbers below are from SYNTHETIC data** (`scripts/synthetic-discogs-dump.ts`), not a real
+dump. The generator models a plausible record shape:
+- 2–18 tracks, some with sub-tracks;
+- 0–8 extra artists;
+- 0–5 companies and 0–5 identifiers;
+- videos on 40% of records.
+
+The environment was 4 vCPU (Xeon 2.1 GHz), 16 GB RAM, local disk. Releases were imported with no
+artists, labels or masters present, so references stay unresolved, as in a releases-first load.
+
+| Run | Records | Rate | Wall | Parse+gunzip | Normalise | Write | Reconcile | Reindex |
+|---|---|---|---|---|---|---|---|---|
+| 50k, incremental | 50,000 new | 1,889/s | 26.5 s | 7.4 s | 2.0 s | 16.7 s | 0.4 s | – |
+| 50k, `--defer-search` | 50,000 new | 1,914/s | 26.1 s | 7.5 s | 2.0 s | 16.2 s | 0.4 s | 1.5 s (total 27.6 s) |
+| 50k re-run, unchanged | 50,000 unchanged | 4,167/s | 12.0 s | 7.4 s | 2.0 s | 2.2 s | 0.4 s | – |
+| 300k, incremental | 300,000 new | 1,677/s | 178.9 s | 43.5 s | 11.0 s | 121.8 s | 2.5 s | – |
+
+How the write time for the 300k run (121.8 s) breaks down:
+
+| Part | Time |
+|---|---|
+| Relationship lookups | 0.8 s |
+| Content hashing | 10.3 s |
+| Provenance and external IDs | 3.9 s |
+| Search index | 2.6 s |
+| Row inserts and child rows | ≈72.6 s |
+| Transaction commit and WAL checkpoint (outside the writer) | ≈31.7 s |
+
+| Other measurements | 50k | 300k |
+|---|---|---|
+| Rate over time | 1,900/s | ~1,650/s (−13%) |
+| Peak memory (RSS) | 254 MB | 249 MB (flat) |
+| Database growth | 171.6 MB (3,600 B/release) | 1,051.7 MB (3,676 B/release) |
+| of which search index | 19.4 MB (407 B/release) | 117.5 MB (411 B/release) |
+| Title search p50 / p95 | 9.1 / 15.0 ms | 46.4 / 71.3 ms |
+| Catalog-number search p50 / p95 | 1.6 / 2.2 ms | 6.5 / 11.3 ms |
+
+What this shows:
+- **Main costs, as a share of wall time.**
+
+  | Cost | 50k | 300k |
+  |---|---|---|
+  | Row inserts and child rows | 41% | 41% |
+  | XML parsing and gunzip | 28% | 24% |
+  | Commit and WAL checkpoint | 11% | 18% |
+  | Normalising | 8% | 6% |
+  | Content hashing | 6% | 6% |
+  | Provenance | 2% | 2% |
+  | Search index | 1.5% | 1.4% |
+  | Lookups | <1% | <1% |
+
+  The commit/checkpoint share is the part that grows with database size.
+- **Re-runs.** On unchanged records, parsing dominates (61%).
+- **Deferred search** doesn't meaningfully help at 50k–300k.
+- **Title search latency grows faster than the data.** The synthetic vocabulary is only 18 words,
+  so almost every title query matches a large share of records; real data should do better. It
+  still needs checking at scale.
+- **Full catalog projection.** Assume the synthetic shape holds, and roughly 18 million releases
+  (Discogs' public figure, not confirmed from a dump). Then the releases load is at least ~3 hours
+  at ≥1,650/s, and the releases tables need ~65–70 GB. Degradation beyond 300k rows is not
+  measured.
 
 ## Mapping
 

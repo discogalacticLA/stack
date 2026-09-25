@@ -15,7 +15,8 @@ import path from "node:path";
 import type { DB } from "../../../db/index.js";
 import { FatalImportError, streamRecords, type XNode } from "./stream.js";
 import { artistFromNode, labelFromNode, masterFromNode, RecordError, releaseFromNode } from "./normalize.js";
-import { DiscogsCatalogWriter, reconcileReferences, unresolvedCounts, type BatchResult } from "./writer.js";
+import { DiscogsCatalogWriter, reconcileReferences, unresolvedCounts, type BatchResult, type WriterTimings } from "./writer.js";
+import { markSearchStale, reindexAll, searchBackend } from "../../search/index.js";
 
 export type DumpType = "artists" | "labels" | "masters" | "releases";
 export const IMPORT_ORDER: DumpType[] = ["artists", "labels", "masters", "releases"];
@@ -55,6 +56,12 @@ export interface RunOptions {
   onProgress?: (p: Progress) => void;
   progressEveryMs?: number;
   now?: () => Date;
+  /**
+   * Bulk-load mode: write catalog rows only and skip search-index updates. The index is marked
+   * stale and must be rebuilt with `reindexAll()` (`catalog search:reindex`); `import-all
+   * --defer-search` does that once at the end. A resumed run keeps the mode it started with.
+   */
+  deferSearch?: boolean;
   /** Test hook: throw a fatal error after this many records have been committed. */
   failAfterRecords?: number;
 }
@@ -72,7 +79,16 @@ export function parseDumpFileName(file: string): { type: DumpType | null; versio
   };
 }
 
-export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { status: string; runId: number }> {
+/**
+ * Where the time went, in ms. `parse` = wall time not spent in normalise/write/reconcile, i.e.
+ * gunzip + XML parsing + tree building + the importer's own bookkeeping. `write` includes the
+ * writer's sub-phases (lookup, hash, provenance, search) plus plain row inserts and the commit.
+ */
+export interface ImportTimings { wall: number; parse: number; normalize: number; write: number; reconcile: number; writer: WriterTimings }
+
+export interface ImportResult extends Progress { status: string; runId: number; searchMode: "incremental" | "deferred"; timings: ImportTimings }
+
+export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult> {
   const nowDate = opts.now ?? (() => new Date());
   const now = () => nowDate().toISOString();
   const meta = parseDumpFileName(opts.file);
@@ -85,6 +101,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
   // ── Create or resume the run ──
   let runId: number;
   let skip = 0;
+  let deferSearch = !!opts.deferSearch;
   if (opts.resumeRunId) {
     const run = db.prepare("SELECT * FROM catalog_import_runs WHERE id = ?").get(opts.resumeRunId) as any;
     if (!run) throw new FatalImportError(`Import run #${opts.resumeRunId} not found.`);
@@ -93,15 +110,19 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
     if (run.file_size != null && run.file_size !== fileSize) throw new FatalImportError(`This file (${fileSize} bytes) is not the one run #${run.id} was reading (${run.file_size} bytes). Start a new run instead.`);
     runId = run.id;
     skip = run.checkpoint_record_index;
+    deferSearch = opts.deferSearch ?? run.search_mode === "deferred";
     db.prepare("UPDATE catalog_import_runs SET status = 'running', fatal_error = NULL, updated_at = ? WHERE id = ?").run(now(), runId);
   } else {
     const active = db.prepare("SELECT id FROM catalog_import_runs WHERE entity_type = ? AND status = 'running'").get(type) as any;
     if (active) throw new FatalImportError(`Run #${active.id} (${type}) is marked running. Resume it with --resume ${active.id}, or mark it cancelled with \`catalog cancel ${active.id}\` if it was interrupted.`);
     runId = Number(db.prepare(
-      `INSERT INTO catalog_import_runs (source, entity_type, source_version, dump_date, file_name, file_path, file_size, expected_hash, status, started_at, created_at, updated_at)
-       VALUES ('discogs', ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-    ).run(type, meta.version, meta.date, path.basename(opts.file), path.resolve(opts.file), fileSize, opts.expectedHash ?? null, now(), now(), now()).lastInsertRowid);
+      `INSERT INTO catalog_import_runs (source, entity_type, source_version, dump_date, file_name, file_path, file_size, expected_hash, search_mode, status, started_at, created_at, updated_at)
+       VALUES ('discogs', ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+    ).run(type, meta.version, meta.date, path.basename(opts.file), path.resolve(opts.file), fileSize, opts.expectedHash ?? null, deferSearch ? "deferred" : "incremental", now(), now(), now()).lastInsertRowid);
   }
+  db.prepare("UPDATE catalog_import_runs SET search_mode = ? WHERE id = ?").run(deferSearch ? "deferred" : "incremental", runId);
+  // Mark stale before the first write, so an interrupted deferred run still leaves the flag set.
+  if (deferSearch) markSearchStale(db, `Import run #${runId} (${type}) was run with deferred search`, now());
   const logDir = opts.logDir ?? path.resolve("data/import-logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `catalog-run-${runId}.ndjson`);
@@ -114,7 +135,13 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
     unchanged: run0.records_unchanged, failed: run0.records_failed, skippedLocal: run0.records_skipped_local, unresolved: run0.unresolved_references,
     lastExternalId: run0.last_external_id, bytesRead: 0, fileSize, recordsPerSecond: 0, elapsedSeconds: 0,
   };
-  const writer = new DiscogsCatalogWriter(db, runId, now);
+  const writer = new DiscogsCatalogWriter(db, runId, now, { search: deferSearch ? null : searchBackend(db) });
+  const phase = { normalize: 0, write: 0, reconcile: 0 };
+  const wallStart = performance.now();
+  const timingsOf = (): ImportTimings => {
+    const wall = performance.now() - wallStart;
+    return { wall, parse: Math.max(0, wall - phase.normalize - phase.write - phase.reconcile), ...phase, writer: { ...writer.timings } };
+  };
   const started = Date.now();
   const processedAtStart = p.processed;
   let lastReport = 0;
@@ -139,6 +166,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
     const errors = batchErrors;
     batch = [];
     batchErrors = [];
+    const tw = performance.now();
     db.transaction(() => {
       const r: BatchResult =
         type === "artists" ? writer.writeArtists(records as any) : type === "labels" ? writer.writeLabels(records as any)
@@ -157,6 +185,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
            unresolved_references = ?, last_external_id = ?, checkpoint_record_index = ?, bytes_read = ?, updated_at = ? WHERE id = ?`,
       ).run(p.processed, p.created, p.updated, p.unchanged, p.failed, p.skippedLocal, p.unresolved, p.lastExternalId, checkpoint, p.bytesRead, now(), runId);
     })();
+    phase.write += performance.now() - tw;
     if (opts.failAfterRecords != null && p.processed >= opts.failAfterRecords) throw new FatalImportError(`Simulated interruption after ${p.processed} records`);
     report();
   };
@@ -170,7 +199,8 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
       batchErrors.push({ externalId: null, errorType: "invalid_record", message: `Record #${m.index + 1} exceeds the per-record size limit and was skipped.`, raw: null });
     } else {
       try {
-        batch.push(NORMALIZE[type](node));
+        const t0 = performance.now();
+        try { batch.push(NORMALIZE[type](node)); } finally { phase.normalize += performance.now() - t0; }
         if (m.truncated) batchErrors.push({ externalId: idGuess, errorType: "field_truncated", message: "A very long field was truncated to the size limit (record imported).", raw: null });
       } catch (e: any) {
         if (!(e instanceof RecordError)) throw e;
@@ -202,10 +232,12 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
       if (!(e instanceof StopReading)) throw e;
     }
     flushWithWarnings();
+    const tr = performance.now();
     const reconciled = reconcileReferences(db);
     // Store what is still unresolved after reconciliation (catalog-wide), not the write-time count.
     const remaining = unresolvedCounts(db);
     p.unresolved = Object.values(remaining).reduce((a, b) => a + b, 0);
+    phase.reconcile += performance.now() - tr;
     db.prepare("UPDATE catalog_import_runs SET unresolved_references = ? WHERE id = ?").run(p.unresolved, runId);
     if (!stats) {
       // Stopped by --limit: a partial run that can be resumed.
@@ -230,7 +262,38 @@ export async function runImport(db: DB, opts: RunOptions): Promise<Progress & { 
   }
   await new Promise((r) => log.end(r));
   report(true);
-  return { ...p, status, runId };
+  return { ...p, status, runId, searchMode: deferSearch ? "deferred" : "incremental", timings: timingsOf() };
+}
+
+export interface ImportAllOptions extends Omit<RunOptions, "file" | "type" | "resumeRunId" | "expectedHash" | "limit"> {
+  dir: string;
+  date?: string;                                  // YYYYMMDD: only files for that dump
+  checksumFor?: (file: string) => string | null;  // expected sha256 per file (from CHECKSUM.txt)
+}
+
+/**
+ * Imports every dump in `dir` in dependency order (artists → labels → masters → releases).
+ * With `deferSearch`, no search documents are written during the runs; once all runs have
+ * finished without a fatal error, references are reconciled and the index is rebuilt once.
+ */
+export async function runImportAll(db: DB, opts: ImportAllOptions) {
+  const files = fs.readdirSync(opts.dir).filter((f) => /\.xml(\.gz)?$/.test(f) && (!opts.date || f.includes(opts.date)));
+  const runs: ImportResult[] = [];
+  const skipped: DumpType[] = [];
+  for (const type of IMPORT_ORDER) {
+    const f = files.find((x) => parseDumpFileName(x).type === type);
+    if (!f) { skipped.push(type); continue; }
+    const file = path.join(opts.dir, f);
+    runs.push(await runImport(db, { ...opts, file, type, expectedHash: opts.checksumFor?.(file) ?? null }));
+  }
+  let reindexed: { documents: number; ms: number } | null = null;
+  if (opts.deferSearch && runs.length) {
+    reconcileReferences(db);
+    const t = performance.now();
+    const documents = reindexAll(db);
+    reindexed = { documents, ms: performance.now() - t };
+  }
+  return { runs, skipped, reindexed, unresolved: unresolvedCounts(db) };
 }
 
 export function getRun(db: DB, id?: number) {

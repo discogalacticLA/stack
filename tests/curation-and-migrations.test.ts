@@ -157,6 +157,7 @@ describe("migrations", () => {
     });
     const before = counts();
     const pressings = (db.prepare("SELECT COUNT(*) AS n FROM releases").get() as any).n;
+    expect(migrateDown(db)).toBe("004_search_index_state.sql"); // newer migrations revert first
     expect(migrateDown(db)).toBe("003_catalog_foundation.sql");
     expect((db.prepare("SELECT COUNT(*) AS n FROM editions").get() as any).n).toBe(pressings);
     expect((db.prepare("SELECT COUNT(*) AS n FROM copies c JOIN editions e ON e.id = c.edition_id").get() as any).n).toBe(before.linked);
@@ -166,6 +167,20 @@ describe("migrations", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM catalog_search").get() as any).n).toBeGreaterThan(0);
     // Once Discogs-imported data exists, reverting is refused instead of losing it.
     db.prepare("INSERT INTO artists (name, sort_name, discogs_artist_id, created_at) VALUES ('X', 'X', 1, 'now')").run();
+    expect(migrateDown(db)).toBe("004_search_index_state.sql");
     expect(() => migrateDown(db)).toThrow(/Refusing to revert/);
+  });
+
+  it("004 adds search-index state and run search mode, and reverts cleanly", () => {
+    const { db } = fullSetup();
+    const cols = () => (db.prepare("PRAGMA table_info(catalog_import_runs)").all() as any[]).map((c) => c.name);
+    expect(cols()).toContain("search_mode");
+    expect(db.prepare("SELECT name, stale_since FROM search_index_state").all()).toEqual([{ name: "catalog", stale_since: null }]);
+    expect(migrateDown(db)).toBe("004_search_index_state.sql");
+    expect(cols()).not.toContain("search_mode");
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'search_index_state'").get()).toBeUndefined();
+    migrate(db);
+    expect(cols()).toContain("search_mode");
+    expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 });
