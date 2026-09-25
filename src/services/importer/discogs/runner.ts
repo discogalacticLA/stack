@@ -15,7 +15,7 @@ import path from "node:path";
 import type { DB } from "../../../db/index.js";
 import { FatalImportError, streamRecords, type XNode } from "./stream.js";
 import { artistFromNode, labelFromNode, masterFromNode, RecordError, releaseFromNode } from "./normalize.js";
-import { DiscogsCatalogWriter, reconcileReferences, resetReconcileScope, unresolvedCounts, type BatchResult, type WriterTimings } from "./writer.js";
+import { DiscogsCatalogWriter, reconcileReferences, resetReconcileScope, unresolvedCounts, type BatchResult, type StatementTime, type WriterTimings } from "./writer.js";
 import { markSearchStale, reindexAll, searchBackend } from "../../search/index.js";
 
 export type DumpType = "artists" | "labels" | "masters" | "releases";
@@ -44,6 +44,8 @@ export interface Progress {
   fileSize: number;
   recordsPerSecond: number;
   elapsedSeconds: number;
+  /** With `profile`: cumulative ms per phase and per writer statement so far. */
+  profile?: { phases: { parse: number; normalize: number; write: number; writer: WriterTimings }; statements: StatementTime[] };
 }
 
 export interface RunOptions {
@@ -63,6 +65,8 @@ export interface RunOptions {
    * --defer-search` does that once at the end. A resumed run keeps the mode it started with.
    */
   deferSearch?: boolean;
+  /** Collect per-statement timings (reported via onProgress and in the result). */
+  profile?: boolean;
   /** Test hook: throw a fatal error after this many records have been committed. */
   failAfterRecords?: number;
 }
@@ -137,7 +141,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
     lastExternalId: run0.last_external_id, bytesRead: 0, fileSize, recordsPerSecond: 0, elapsedSeconds: 0,
   };
   resetReconcileScope(db);
-  const writer = new DiscogsCatalogWriter(db, runId, now, { search: deferSearch ? null : searchBackend(db) });
+  const writer = new DiscogsCatalogWriter(db, runId, now, { search: deferSearch ? null : searchBackend(db), profile: opts.profile });
   const phase = { normalize: 0, write: 0, reconcile: 0 };
   const wallStart = performance.now();
   const timingsOf = (): ImportTimings => {
@@ -159,6 +163,13 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
     lastReport = t;
     p.elapsedSeconds = (t - started) / 1000;
     p.recordsPerSecond = p.elapsedSeconds > 0 ? Math.round((p.processed - processedAtStart) / p.elapsedSeconds) : 0;
+    if (opts.profile) {
+      const wall = performance.now() - wallStart;
+      p.profile = {
+        phases: { parse: Math.max(0, wall - phase.normalize - phase.write), normalize: phase.normalize, write: phase.write, writer: { ...writer.timings } },
+        statements: [...writer.statementTimes.values()].map((x) => ({ ...x })),
+      };
+    }
     opts.onProgress?.({ ...p });
   };
 

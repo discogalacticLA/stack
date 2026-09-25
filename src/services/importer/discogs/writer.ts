@@ -57,16 +57,23 @@ export interface WriterOptions {
    * works (SQLite FTS today, Postgres/OpenSearch later).
    */
   search?: SearchBackend | null;
+  /** Time every prepared statement the writer runs (small overhead; for benchmarks). */
+  profile?: boolean;
 }
+
+export interface StatementTime { sql: string; ms: number; calls: number }
 
 export class DiscogsCatalogWriter {
   private sourceId: number;
   private stmts: Record<string, any> = {};
   private search: SearchBackend | null;
   readonly timings: WriterTimings = { lookup: 0, hash: 0, provenance: 0, search: 0, total: 0 };
+  readonly statementTimes = new Map<string, StatementTime>();
+  private profile: boolean;
   constructor(private db: DB, private runId: number, private now: () => string, opts: WriterOptions = {}) {
     this.sourceId = (db.prepare("SELECT id FROM catalog_sources WHERE name = 'discogs'").get() as { id: number }).id;
     this.search = opts.search === undefined ? searchBackend(db) : opts.search;
+    this.profile = !!opts.profile;
     db.exec("CREATE TEMP TABLE IF NOT EXISTS reconcile_scope (entity TEXT NOT NULL, ext INTEGER NOT NULL, PRIMARY KEY (entity, ext)) WITHOUT ROWID");
   }
 
@@ -93,7 +100,19 @@ export class DiscogsCatalogWriter {
   }
 
   private st(sql: string) {
-    return (this.stmts[sql] ??= this.db.prepare(sql));
+    return (this.stmts[sql] ??= this.profile ? this.timedStatement(sql) : this.db.prepare(sql));
+  }
+
+  private timedStatement(sql: string) {
+    const stmt = this.db.prepare(sql);
+    const key = sql.replace(/\s+/g, " ").trim().slice(0, 100);
+    const rec = this.statementTimes.get(key) ?? { sql: key, ms: 0, calls: 0 };
+    this.statementTimes.set(key, rec);
+    const wrap = <F extends (...a: any[]) => any>(f: F) => ((...a: any[]) => {
+      const t = performance.now();
+      try { return f.apply(stmt, a); } finally { rec.ms += performance.now() - t; rec.calls++; }
+    }) as F;
+    return { run: wrap(stmt.run), get: wrap(stmt.get), all: wrap(stmt.all) };
   }
 
   private provenance(entity: string, ids: number[]): Map<number, string> {

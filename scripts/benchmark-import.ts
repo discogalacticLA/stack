@@ -3,7 +3,10 @@
  * time per phase, peak memory, database growth, search-index growth and search latency.
  *
  *   npx tsx scripts/benchmark-import.ts --file data/discogs-dumps/discogs_20260901_releases.xml.gz \
- *     --limit 50000 --db data/bench-incremental.db [--defer-search] [--out bench.json]
+ *     --limit 50000 --db data/bench-incremental.db [--defer-search] [--out bench.json] [--progress] [--profile]
+ *
+ * --profile times every writer statement and prints the six slowest per 10 s interval (with
+ * --progress), which shows which statement grows as the database grows.
  *
  * Safety: refuses to use an existing database file, so it can never touch your working catalog.
  * Relationships to entities not in the benchmark DB (artists, labels, masters) stay unresolved, which
@@ -63,12 +66,30 @@ const limit = flag("limit") ? Number(flag("limit")) : 50_000;
 const t0 = performance.now();
 const intervals: { processed: number; seconds: number; intervalRate: number; rssMB: number }[] = [];
 let lastProcessed = 0;
+let lastPhases: Record<string, number> = {};
+const lastStmts = new Map<string, { sql: string; ms: number; calls: number }>();
+const profileIntervals: unknown[] = [];
 let lastAt = t0;
 const r = await runImport(db, {
   file, type: flag("type") as any, limit, batchSize: Number(flag("batch")) || undefined, deferSearch: has("defer-search"),
   logDir: fs.mkdtempSync(path.join(os.tmpdir(), "bench-logs-")),
   progressEveryMs: 10_000,
+  profile: has("profile"),
   onProgress: (p) => {
+    if (p.profile) {
+      const ph = p.profile.phases;
+      const cur = { parse: ph.parse, normalize: ph.normalize, write: ph.write, writerTotal: ph.writer.total, lookup: ph.writer.lookup, hash: ph.writer.hash, provenance: ph.writer.provenance, search: ph.writer.search };
+      const d = Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, Math.round(v - ((lastPhases as any)[k] ?? 0))])) as Record<string, number>;
+      const stmts = p.profile.statements.map((x) => ({ sql: x.sql, ms: Math.round(x.ms - (lastStmts.get(x.sql)?.ms ?? 0)), calls: x.calls - (lastStmts.get(x.sql)?.calls ?? 0) }))
+        .sort((a, b) => b.ms - a.ms).slice(0, 6);
+      profileIntervals.push({ processed: p.processed, phasesMs: d, commitMs: d.write - d.writerTotal, topStatements: stmts });
+      if (has("progress")) {
+        console.error(`   ms this interval: parse ${d.parse} · normalize ${d.normalize} · commit+other ${d.write - d.writerTotal} · lookup ${d.lookup} · hash ${d.hash} · provenance ${d.provenance} · search ${d.search}`);
+        for (const x of stmts) console.error(`   ${String(x.ms).padStart(6)} ms  ${String(x.calls).padStart(7)}×  ${x.sql}`);
+      }
+      lastPhases = cur;
+      for (const x of p.profile.statements) lastStmts.set(x.sql, { ...x });
+    }
     const now = performance.now();
     const rate = Math.round((p.processed - lastProcessed) / ((now - lastAt) / 1000));
     intervals.push({ processed: p.processed, seconds: +((now - t0) / 1000).toFixed(1), intervalRate: rate, rssMB: mb(process.memoryUsage().rss) });
@@ -111,6 +132,7 @@ const report = {
   largestObjectsMB: after.byObject.sort((a, b) => b.bytes - a.bytes).slice(0, 12).map((o) => ({ name: o.name, mb: mb(o.bytes) })),
   searchLatencyMs: { titles: latency(titles), catalogNumbers: latency(catnos) },
   intervals,
+  ...(has("profile") ? { profileIntervals } : {}),
 };
 db.close();
 console.log(JSON.stringify(report, null, 2));
