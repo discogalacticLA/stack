@@ -1,4 +1,4 @@
-# Music Library Project (temporary name)
+# Stack
 
 A **local prototype** of an independent music catalog, private collection manager, DJ-library
 importer, curation tool and *simulated* marketplace. It is not production-ready, has no live

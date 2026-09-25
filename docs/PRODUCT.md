@@ -1,6 +1,6 @@
 # Product
 
-*Music Library Project* is a temporary name. Permanent branding hasn't been decided.
+The app is called **Stack**. Visual branding (logo, colours) hasn't been decided.
 
 ## Who it is for
 

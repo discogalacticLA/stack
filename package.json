@@ -1,8 +1,8 @@
 {
-  "name": "music-library-project",
+  "name": "stack",
   "version": "0.1.0",
   "private": true,
-  "description": "Music Library Project (temporary name): catalog, private collections, DJ libraries, curation and a future marketplace. Local prototype.",
+  "description": "Stack: catalog, private collections, DJ libraries, curation and a future marketplace. Local prototype.",
   "type": "module",
   "engines": {
     "node": ">=22"

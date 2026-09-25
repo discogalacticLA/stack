@@ -58,7 +58,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 ## Decisions needed (from the owner)
 
-1. **Permanent name and branding.** "Music Library Project" is temporary.
+1. **Branding.** The name is **Stack** (decided 2026-09-25). Still open: logo and visual identity, and a trademark/domain check (not done).
 2. **Hosting.** Options and costs are in HOSTING_OPTIONS.md: from ≈€20/month (one server, SQLite) to ≈$85–135/month (managed PostgreSQL).
 3. **Imported Discogs YouTube links.** The dump's `<videos>` are stored as preview links attributed
    to the Discogs source, without local moderation. Keep this, or queue them for moderation?
@@ -95,7 +95,7 @@ before any hosting.**
 
 ## Prompt for handing this to another assistant
 
-> You're working on "Music Library Project" (temporary name), a local TypeScript/Express/SQLite
+> You're working on "Stack", a local TypeScript/Express/SQLite
 > prototype. Read README.md, then docs/ARCHITECTURE.md, docs/DISCOGS_IMPORT.md, docs/IMPORTS.md
 > and this file.
 >
