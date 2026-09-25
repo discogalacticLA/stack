@@ -59,7 +59,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 ## Decisions needed (from the owner)
 
 1. **Permanent name and branding.** "Music Library Project" is temporary.
-2. **PostgreSQL before any hosting.** This means paid infrastructure; see ARCHITECTURE.md.
+2. **Hosting.** Options and costs are in HOSTING_OPTIONS.md: from ≈€20/month (one server, SQLite) to ≈$85–135/month (managed PostgreSQL).
 3. **Imported Discogs YouTube links.** The dump's `<videos>` are stored as preview links attributed
    to the Discogs source, without local moderation. Keep this, or queue them for moderation?
 4. **Checking against real exports.** The importers need a real Discogs CSV and a real Rekordbox

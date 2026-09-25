@@ -75,6 +75,7 @@ Imports upsert by Discogs ID. They never truncate the catalog, can be resumed
 - [docs/DISCOGS_IMPORT.md](docs/DISCOGS_IMPORT.md): Discogs monthly dump importer
 - [docs/DISCOGS_FORMAT_COVERAGE.md](docs/DISCOGS_FORMAT_COVERAGE.md): which dump elements are imported or ignored
 - [docs/POSTGRES_READINESS.md](docs/POSTGRES_READINESS.md): what moving the catalog to PostgreSQL involves
+- [docs/HOSTING_OPTIONS.md](docs/HOSTING_OPTIONS.md): hosting setups and monthly costs (for a later decision)
 - [docs/HANDOFF.md](docs/HANDOFF.md): current state, open decisions, next steps
 
 ## Data and rights
