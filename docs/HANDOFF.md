@@ -93,8 +93,9 @@ before any hosting.**
 
 ## Suggested next steps
 
-1. Measure and improve search latency on the full catalog (prefix and short terms). Then browse the
-   full catalog in the app (`DATABASE_PATH=data/catalog-full.db npm run dev`).
+1. Measure and improve search latency on the full catalog (prefix and short terms), using
+   `npx tsx scripts/search-benchmark.ts --db data/catalog-full.db --out data/search-bench.json`
+   (read-only). Then browse the full catalog in the app (`DATABASE_PATH=data/catalog-full.db npm run dev`).
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.
