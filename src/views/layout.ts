@@ -4,7 +4,7 @@ import { html, type SafeHtml } from "../lib/html.js";
 import { cartCount } from "../domain/orders.js";
 import { csrf, flashes } from "./components.js";
 
-export const APP_NAME = "Stack";
+export const APP_NAME = "Stacks";
 
 export interface PageOpts {
   title: string;

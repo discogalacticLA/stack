@@ -1,8 +1,8 @@
 {
-  "name": "stack",
+  "name": "stacks",
   "version": "0.1.0",
   "private": true,
-  "description": "Stack: catalog, private collections, DJ libraries, curation and a future marketplace. Local prototype.",
+  "description": "Stacks: catalog, private collections, DJ libraries, curation and a future marketplace. Local prototype.",
   "type": "module",
   "engines": {
     "node": ">=22"

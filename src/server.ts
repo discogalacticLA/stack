@@ -13,6 +13,6 @@ const app = createApp(ctx);
 setInterval(() => expireReservations(db, systemClock), 60_000).unref();
 
 app.listen(config.port, () => {
-  console.log(`Stack (local prototype) on http://localhost:${config.port}`);
+  console.log(`Stacks (local prototype) on http://localhost:${config.port}`);
   console.log(`Database: ${config.databasePath} · demo switcher: ${config.demoSwitcher ? "on (development)" : "off"}`);
 });

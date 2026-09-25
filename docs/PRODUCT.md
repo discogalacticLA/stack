@@ -1,6 +1,6 @@
 # Product
 
-The app is called **Stack**. Visual branding (logo, colours) hasn't been decided.
+The app is called **Stacks**. Visual branding (logo, colours) hasn't been decided.
 
 ## Who it is for
 
