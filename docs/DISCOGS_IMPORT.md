@@ -239,8 +239,18 @@ slowdown beyond 50k real rows hasn't been measured.
      writes from the extra partial indexes.
 3. **Search tail latency grows** (p95 over 200 ms at 1M), although the medians stay low.
 
-Next measurement on the Mac, the same 300k slice with a large SQLite page cache and
-`synchronous=NORMAL`:
+4. **A 1 GB page cache with `synchronous=NORMAL` did not help.** On the Mac, the same slice ran at
+   1,323/s at 247k records, against 1,672/s untuned. So the decay is not page-cache pressure.
+5. **Two statements scanned whole tables. Fixed in migration 007**, and guarded by a test that
+   EXPLAINs every statement the importer runs and fails on any full catalog-table scan:
+   - Company credits without a Discogs ID were matched by name with no index. That meant one scan
+     of `companies` per such credit, growing with the table. This is the suspected cause of the
+     decay; to be confirmed on the Mac.
+   - Deleting a changed release's tracks (monthly updates) checked the foreign keys
+     `release_tracks.parent_track_id` and `release_extra_artists.track_id` without an index. Every
+     deleted track scanned both tables.
+
+The tuned-cache run, for reference:
 
 ```bash
 npx tsx scripts/benchmark-import.ts --file ~/Downloads/discogs_20251201_releases.xml.gz --limit 300000 --db data/bench-300k-tuned.db --cache-mb 1024 --sync normal --progress --out data/bench-300k-tuned.json

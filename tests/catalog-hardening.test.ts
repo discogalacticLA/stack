@@ -380,3 +380,32 @@ describe("run-scoped reconciliation", () => {
     }
   });
 });
+
+describe("import statements never scan a whole table", () => {
+  it("every SELECT/UPDATE/DELETE the importer runs (all four dumps, re-import, monthly update) uses an index", async () => {
+    const env = setup();
+    const seen = new Set<string>();
+    const orig = env.db.prepare.bind(env.db);
+    (env.db as any).prepare = (sql: string) => { if (/^\s*(SELECT|UPDATE|DELETE)/i.test(sql)) seen.add(sql); return orig(sql); };
+    // Company credits without a Discogs id exercise the by-name lookup.
+    await runImport(env.db, { file: dump("idless-co.xml", "releases",
+      `<release id="8990" status="Accepted"><title>Idless</title><companies><company><name>Unnamed Plant</name><entity_type>17</entity_type><entity_type_name>Pressed By</entity_type_name></company></companies><formats><format name="Vinyl" qty="1" text=""/></formats></release>`), type: "releases", logDir: logDir() });
+    for (const t of ["artists", "labels", "masters", "releases"]) await runImport(env.db, { file: path.join(FIX, `${t}.xml.gz`), logDir: logDir() });
+    await runImport(env.db, { file: path.join(FIX, "releases_v2.xml.gz"), type: "releases", logDir: logDir() });
+    (env.db as any).prepare = orig;
+    // Bookkeeping on small tables (runs, errors, sources) and the end-of-run unresolved counts
+    // (index-only scans of partial indexes) are allowed; catalog-table scans are not.
+    const allowed = /^(catalog_import_runs|catalog_import_errors|catalog_sources|search_index_state|json_each|reconcile_scope|sqlite_master|sqlite_schema)$/;
+    const offenders: string[] = [];
+    for (const sql of seen) {
+      if (/SELECT COUNT\(\*\) AS n FROM \w+ WHERE \w+ IS NULL AND \w+ IS NOT NULL/.test(sql)) continue; // unresolvedCounts
+      const plan = (orig(`EXPLAIN QUERY PLAN ${sql}`).all(...new Array((sql.match(/\?/g) ?? []).length).fill(1)) as { detail: string }[]).map((r) => r.detail);
+      for (const d of plan) {
+        if (/VIRTUAL TABLE INDEX 0:=/.test(d)) continue; // FTS5 rowid lookup
+        const m = /^SCAN (?:temp\.)?(\w+)(?! USING (?:COVERING )?INDEX)/.exec(d);
+        if (m && !allowed.test(m[1])) offenders.push(`${m[1]}: ${sql.replace(/\s+/g, " ").slice(0, 120)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

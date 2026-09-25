@@ -157,6 +157,7 @@ describe("migrations", () => {
     });
     const before = counts();
     const pressings = (db.prepare("SELECT COUNT(*) AS n FROM releases").get() as any).n;
+    expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql"); // newer migrations revert first
     expect(migrateDown(db)).toBe("005_release_series.sql");
     expect(migrateDown(db)).toBe("004_search_index_state.sql");
@@ -169,6 +170,7 @@ describe("migrations", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM catalog_search").get() as any).n).toBeGreaterThan(0);
     // Once Discogs-imported data exists, reverting is refused instead of losing it.
     db.prepare("INSERT INTO artists (name, sort_name, discogs_artist_id, created_at) VALUES ('X', 'X', 1, 'now')").run();
+    expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
     expect(migrateDown(db)).toBe("005_release_series.sql");
     expect(migrateDown(db)).toBe("004_search_index_state.sql");
@@ -180,6 +182,7 @@ describe("migrations", () => {
     const cols = () => (db.prepare("PRAGMA table_info(catalog_import_runs)").all() as any[]).map((c) => c.name);
     expect(cols()).toContain("search_mode");
     expect(db.prepare("SELECT name, stale_since FROM search_index_state").all()).toEqual([{ name: "catalog", stale_since: null }]);
+    expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
     expect(migrateDown(db)).toBe("005_release_series.sql");
     expect(migrateDown(db)).toBe("004_search_index_state.sql");
@@ -193,12 +196,14 @@ describe("migrations", () => {
   it("005 adds release_series and refuses to revert once series data exists", () => {
     const { db } = fullSetup();
     const rel = (db.prepare("SELECT id FROM releases LIMIT 1").get() as any).id;
+    expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
     expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'artist_members_unresolved'").get()).toBeUndefined();
     expect(migrateDown(db)).toBe("005_release_series.sql");
     expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'release_series'").get()).toBeUndefined();
     migrate(db);
     db.prepare("INSERT INTO release_series (release_id, discogs_label_id, name) VALUES (?, 1, 'S')").run(rel);
+    expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
     expect(() => migrateDown(db)).toThrow(/Refusing to revert.*release series/s);
     expect(db.prepare("SELECT COUNT(*) AS n FROM release_series").get()).toEqual({ n: 1 });
