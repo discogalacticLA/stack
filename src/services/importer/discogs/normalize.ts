@@ -128,6 +128,8 @@ export interface ReleaseRecord {
   country: string | null; notes: string | null; data_quality: string | null; master_discogs_id: number | null; is_main_release: boolean;
   artists: Credit[]; extra_artists: Credit[];
   labels: { discogs_id: number | null; name: string; catno: string | null }[];
+  /** <series><series name catno id/></series>: series share the label id space. */
+  series: { discogs_id: number | null; name: string; catno: string | null }[];
   companies: { discogs_id: number | null; name: string; catno: string | null; entity_type: number | null; role: string }[];
   formats: { name: string; qty: number | null; text: string | null; descriptions: string[] }[];
   genres: string[]; styles: string[];
@@ -163,6 +165,10 @@ export function releaseFromNode(n: XNode): ReleaseRecord {
     labels: childrenOf(child(n, "labels"), "label").map((l) => ({
       discogs_id: discogsId(l.attrs.id, "label reference", false), name: clip(l.attrs.name ?? "", MAX.name) || "Unknown label",
       catno: clip(l.attrs.catno && l.attrs.catno.toLowerCase() !== "none" ? l.attrs.catno : null, 200),
+    })).slice(0, 50),
+    series: childrenOf(child(n, "series"), "series").map((x) => ({
+      discogs_id: discogsId(x.attrs.id, "series reference", false), name: clip(x.attrs.name ?? "", MAX.name) || "Unknown series",
+      catno: clip(x.attrs.catno && x.attrs.catno.toLowerCase() !== "none" ? x.attrs.catno : null, 200),
     })).slice(0, 50),
     companies: childrenOf(child(n, "companies"), "company").map((c) => ({
       discogs_id: discogsId(text(c, "id"), "company", false), name: clip(text(c, "name"), MAX.name) ?? "Unknown company",

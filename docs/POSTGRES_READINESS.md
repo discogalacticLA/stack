@@ -74,7 +74,7 @@ the domain functions and the routes.
 ## MIGRATION RISKS
 
 - **Async ripple.** Converting the sync call sites changes almost every catalog function signature,
-  and the route handlers that call them. It's mechanical but wide. The test suite (128 tests) is the
+  and the route handlers that call them. It's mechanical but wide. The test suite (130 tests) is the
   safety net.
 - **Search behaviour changes.**
   - Ranking: FTS5 bm25 with weights 10/3/6/1 will not rank the same as `ts_rank_cd`.
@@ -95,7 +95,16 @@ the domain functions and the routes.
 - **Cost.** A hosted Postgres big enough for the full catalog (see size projection in
   DISCOGS_IMPORT.md) is paid infrastructure. **That needs an owner decision.**
 
-## Measured facts that bear on the decision (synthetic data, this environment)
+## Measured facts that bear on the decision
+
+**Real dump, 50k releases (owner's Mac):**
+- 3,155/s;
+- 3,887 B/release;
+- title search p50 0.5 ms;
+- commit + WAL checkpoint 22% of wall time, row inserts 40%, search writes 1.6%;
+- extrapolated full releases load: about 16M records, about 62 GB, about 1.5–2 h.
+
+**Synthetic data (build environment):**
 
 See `docs/DISCOGS_IMPORT.md` → *Benchmarks* for the full numbers.
 

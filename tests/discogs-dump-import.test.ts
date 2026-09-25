@@ -164,6 +164,13 @@ describe("Discogs dump import", () => {
     expect(r404).toMatchObject({ master_id: null, discogs_master_id: 399, format: "8-Track Cartridge", year: 1975 });
     expect(q(env, "SELECT artist_id, discogs_artist_id FROM release_artists WHERE release_id = ?", r404.id)).toEqual({ artist_id: null, discogs_artist_id: 999 });
     expect(q(env, "SELECT label_id, discogs_label_id, catalog_number FROM release_labels WHERE release_id = ?", r404.id)).toEqual({ label_id: null, discogs_label_id: 299, catalog_number: "UL-1" });
+    // Series (seen in the real dump): one links to an imported label entity, one waits for its label.
+    const r401 = byDiscogs(env, "releases", "discogs_release_id", 401);
+    expect(env.db.prepare("SELECT label_id, discogs_label_id, name, catalog_number FROM release_series WHERE release_id = ? ORDER BY position").all(r401.id)).toEqual([
+      { label_id: byDiscogs(env, "labels", "discogs_label_id", 205).id, discogs_label_id: 205, name: "Heliotrope Audio", catalog_number: "Vol. 3" },
+      { label_id: null, discogs_label_id: 298, name: "Unimported Series", catalog_number: null },
+    ]);
+    expect(getReleaseRecord(env.db, r401.id)!.series).toHaveLength(2);
     expect(unresolvedCounts(env.db)).toMatchObject({ releases_without_master: 1, release_artist_credits: 1, release_labels: 1 });
   });
 

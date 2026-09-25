@@ -6,7 +6,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 - Local prototype only. It is not production-ready and not deployed, and it has no real payments.
 - Branch `claude/music-archive-marketplace-ibxhs3` in the `stack` repo.
-- `npm run check` runs the typecheck and 128 vitest tests across 9 files, all passing at the time
+- `npm run check` runs the typecheck and 130 vitest tests across 9 files, all passing at the time
   of writing.
 
 ## Milestones done
@@ -44,10 +44,15 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 - **Real Discogs CSV exports and real Rekordbox XML exports.** The mappings were built from
   community references and synthetic fixtures. The official docs were unreachable from the build
   environment.
-- **Real Discogs dumps.** Not yet read. data.discogs.com was blocked in the build environment, and
-  the historical S3 location returns 403. The download URL structure is therefore unverified;
-  use `download --url` with links copied from data.discogs.com. All benchmarks so far use synthetic
-  data.
+- **Real Discogs dumps: partly validated.** The 2025-12-01 dump was checked on the owner's Mac:
+  - checksums verified;
+  - census of 200k artists, labels and masters, and 50k releases;
+  - a 50k-release benchmark.
+
+  One unknown structure, `release/series`, was found and is now imported (migration 005). A full
+  import, and scaling beyond 50k real releases, have not been measured. The exact download link
+  host (data.discogs.com or S3) is still unconfirmed; the file naming and year folders are
+  confirmed.
 - No browser walkthrough or screenshots were produced for the latest milestone.
 
 ## Decisions needed (from the owner)
@@ -68,8 +73,8 @@ synthetic measurements, is in DISCOGS_IMPORT.md → Benchmarks and in POSTGRES_R
 
 ## Suggested next steps
 
-1. On a machine that can reach data.discogs.com, run the census and the 50k benchmark on the real
-   files (commands in DISCOGS_IMPORT.md). Record the results in DISCOGS_FORMAT_COVERAGE.md.
+1. Benchmark a 1M-release real slice, in both search modes, to measure scaling on real data. Then
+   do a fully linked sample: artists + labels + masters, then releases.
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.

@@ -287,7 +287,7 @@ export class DiscogsCatalogWriter {
     const prov = this.provenance("release", [...existing.values()].map((e) => e.id));
     const allCredits = (r: ReleaseRecord) => [...r.artists, ...r.extra_artists, ...flatTracks(r.tracks).flatMap((t) => [...t.artists, ...t.extra_artists])];
     const artists = this.lookup("artists", "discogs_artist_id", records.flatMap((r) => allCredits(r).map((a) => a.discogs_artist_id)));
-    const labels = this.lookup("labels", "discogs_label_id", records.flatMap((r) => r.labels.map((l) => l.discogs_id)));
+    const labels = this.lookup("labels", "discogs_label_id", records.flatMap((r) => [...r.labels, ...r.series].map((l) => l.discogs_id)));
     const masters = this.lookup("masters", "discogs_master_id", records.map((r) => r.master_discogs_id));
     const companies = this.lookup("companies", "discogs_company_id", records.flatMap((r) => r.companies.map((c) => c.discogs_id)));
     const docs: SearchDocument[] | null = this.search ? [] : null;
@@ -320,7 +320,7 @@ export class DiscogsCatalogWriter {
         id = ex.id;
         this.st(`UPDATE releases SET master_id = ?, discogs_master_id = ?, title = ?, normalized_title = ?, year = ?, released_date = ?, country = ?, status = ?,
             notes = ?, data_quality = ?, label_id = ?, catalog_number = ?, catalog_number_norm = ?, format = ?, format_details = ?, updated_at = ? WHERE id = ?`).run(...vals, now, id);
-        for (const t of ["release_artists", "release_extra_artists", "release_labels", "release_companies", "release_formats", "release_tracks", "release_identifiers", "release_genres", "release_styles"]) {
+        for (const t of ["release_artists", "release_extra_artists", "release_labels", "release_series", "release_companies", "release_formats", "release_tracks", "release_identifiers", "release_genres", "release_styles"]) {
           this.st(`DELETE FROM ${t} WHERE release_id = ?`).run(id);
         }
         this.st("DELETE FROM release_media_links WHERE release_id = ? AND source_id = ?").run(id, this.sourceId);
@@ -335,6 +335,12 @@ export class DiscogsCatalogWriter {
         if (l.discogs_id != null && lid == null) res.unresolved++;
         this.st("INSERT INTO release_labels (release_id, label_id, discogs_label_id, name, catalog_number, catalog_number_norm, position) VALUES (?, ?, ?, ?, ?, ?, ?)")
           .run(id, lid, l.discogs_id, l.name, l.catno, normalizeCode(l.catno), i);
+      });
+      r.series.forEach((x, i) => {
+        const lid = x.discogs_id != null ? labels.get(x.discogs_id)?.id ?? null : null;
+        if (x.discogs_id != null && lid == null) res.unresolved++;
+        this.st("INSERT INTO release_series (release_id, label_id, discogs_label_id, name, catalog_number, catalog_number_norm, position) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(id, lid, x.discogs_id, x.name, x.catno, normalizeCode(x.catno), i);
       });
       r.companies.forEach((c, i) => {
         let cid: number | null = null;
@@ -374,9 +380,9 @@ export class DiscogsCatalogWriter {
       this.touch("release", id, hash, now);
       if (!docs) continue;
       const codes = new Set<string>();
-      for (const l of r.labels) if (l.catno) { codes.add(l.catno); const n = normalizeCode(l.catno); if (n) codes.add(n); }
+      for (const l of [...r.labels, ...r.series]) if (l.catno) { codes.add(l.catno); const n = normalizeCode(l.catno); if (n) codes.add(n); }
       for (const i of r.identifiers) if (["Barcode", "Matrix / Runout", "Label Code"].includes(i.type)) { codes.add(i.value); const n = normalizeCode(i.value); if (n) codes.add(n); }
-      docs.push({ type: "release", id, title: r.title, people: creditLine(r.artists), codes: [...codes].join(" "), extra: [r.labels.map((l) => l.name).join(" "), r.year, r.country, primary.format].filter(Boolean).join(" ") });
+      docs.push({ type: "release", id, title: r.title, people: creditLine(r.artists), codes: [...codes].join(" "), extra: [r.labels.map((l) => l.name).join(" "), r.series.map((x) => x.name).join(" "), r.year, r.country, primary.format].filter(Boolean).join(" ") });
     }
     this.index(docs);
     return res;
@@ -412,6 +418,8 @@ export function reconcileReferences(db: DB): Record<string, number> {
        WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = ${t}.discogs_artist_id)`)])),
     release_labels: run(`UPDATE release_labels SET label_id = (SELECT l.id FROM labels l WHERE l.discogs_label_id = release_labels.discogs_label_id)
       WHERE label_id IS NULL AND discogs_label_id IS NOT NULL AND EXISTS (SELECT 1 FROM labels l WHERE l.discogs_label_id = release_labels.discogs_label_id)`),
+    release_series: run(`UPDATE release_series SET label_id = (SELECT l.id FROM labels l WHERE l.discogs_label_id = release_series.discogs_label_id)
+      WHERE label_id IS NULL AND discogs_label_id IS NOT NULL AND EXISTS (SELECT 1 FROM labels l WHERE l.discogs_label_id = release_series.discogs_label_id)`),
     release_primary_label: run(`UPDATE releases SET label_id = (SELECT rl.label_id FROM release_labels rl WHERE rl.release_id = releases.id ORDER BY rl.position LIMIT 1)
       WHERE label_id IS NULL AND discogs_release_id IS NOT NULL AND EXISTS (SELECT 1 FROM release_labels rl WHERE rl.release_id = releases.id AND rl.position = 0 AND rl.label_id IS NOT NULL)`),
     label_parent: run(`UPDATE labels SET parent_label_id = (SELECT p.id FROM labels p WHERE p.discogs_label_id = labels.parent_discogs_label_id)
@@ -463,6 +471,7 @@ export function unresolvedCounts(db: DB): Record<string, number> {
     release_artist_credits: q("SELECT COUNT(*) AS n FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
     extra_artist_credits: q("SELECT COUNT(*) AS n FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
     release_labels: q("SELECT COUNT(*) AS n FROM release_labels WHERE label_id IS NULL AND discogs_label_id IS NOT NULL"),
+    release_series: q("SELECT COUNT(*) AS n FROM release_series WHERE label_id IS NULL AND discogs_label_id IS NOT NULL"),
     master_artist_credits: q("SELECT COUNT(*) AS n FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
     track_artist_credits: q("SELECT COUNT(*) AS n FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
     artist_aliases: q("SELECT COUNT(*) AS n FROM artist_aliases WHERE alias_artist_id IS NULL AND discogs_alias_id IS NOT NULL"),

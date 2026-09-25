@@ -255,6 +255,7 @@ function unresolvedFor(env: TestEnv) {
     release_artist_credits: "SELECT COUNT(*) AS n FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
     extra_artist_credits: "SELECT COUNT(*) AS n FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
     release_labels: "SELECT COUNT(*) AS n FROM release_labels WHERE label_id IS NULL AND discogs_label_id IS NOT NULL",
+    release_series: "SELECT COUNT(*) AS n FROM release_series WHERE label_id IS NULL AND discogs_label_id IS NOT NULL",
     master_artist_credits: "SELECT COUNT(*) AS n FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
     track_artist_credits: "SELECT COUNT(*) AS n FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
     artist_aliases: "SELECT COUNT(*) AS n FROM artist_aliases WHERE alias_artist_id IS NULL AND discogs_alias_id IS NOT NULL",
@@ -277,15 +278,52 @@ describe("XML structure census", () => {
   it("reports unfamiliar structures instead of silently dropping them", async () => {
     const { census } = await import("../src/services/importer/discogs/coverage.js");
     const file = dump("census.xml", "releases",
-      `<release id="1" status="Accepted"><title>Ünïcode</title><series><series name="Sample Series" catno="SS-1" id="77"/></series><formats><format name="Vinyl" qty="1" text=""><descriptions/></format></formats></release>
+      `<release id="1" status="Accepted"><title>Ünïcode</title><pressing_plant_notes><note ref="77">Sample</note></pressing_plant_notes><formats><format name="Vinyl" qty="1" text=""><descriptions/></format></formats></release>
        <release id="2" status="Accepted"><title>Plain</title></release>`);
     const c = await census(file, "release");
     expect(c.records).toBe(2);
-    expect(c.unknown.map((u) => u.path)).toEqual(["release/series", "release/series/series", "release/series/series@catno", "release/series/series@id", "release/series/series@name"]);
-    expect(c.unknown.find((u) => u.path === "release/series/series@name")).toMatchObject({ records: 1, sample: "Sample Series" });
+    expect(c.unknown.map((u) => u.path)).toEqual(["release/pressing_plant_notes", "release/pressing_plant_notes/note", "release/pressing_plant_notes/note@ref"]);
+    expect(c.unknown.find((u) => u.path === "release/pressing_plant_notes/note")).toMatchObject({ records: 1, sample: "Sample" });
     expect(c.unicodeRecords).toBe(1);
     expect(c.emptyElements).toBeGreaterThan(0);
     const limited = await census(file, "release", 1);
     expect(limited.records).toBe(1);
+  });
+});
+
+describe("release series (found in the real 2025-12-01 dump)", () => {
+  it("imports series as label-linked rows, searchable by series catalog number, resolved later when the series label arrives", async () => {
+    const env = setup();
+    const withSeries = (id: number, series: string) =>
+      `<release id="${id}" status="Accepted"><title>Series Release ${id}</title><labels><label name="Label A" catno="LA-${id}" id="8901"/></labels>` +
+      `<series>${series}</series><formats><format name="Vinyl" qty="1" text=""/></formats></release>`;
+    await imp(env, dump("ser1.xml", "releases", [
+      withSeries(8800, `<series name="Profound Sampler" catno="Vol. 7" id="8950"/>`),
+      withSeries(8801, `<series name="Profound Sampler" catno="none" id="8950"/><series name="Other Line" catno="OL 2" id="8951"/>`),
+    ].join("\n")), "releases");
+    const rows = (d: number) => env.db.prepare("SELECT rs.label_id, rs.discogs_label_id, rs.name, rs.catalog_number, rs.position FROM release_series rs JOIN releases r ON r.id = rs.release_id WHERE r.discogs_release_id = ? ORDER BY rs.position").all(d);
+    expect(rows(8800)).toEqual([{ label_id: null, discogs_label_id: 8950, name: "Profound Sampler", catalog_number: "Vol. 7", position: 0 }]);
+    expect(rows(8801)).toEqual([
+      { label_id: null, discogs_label_id: 8950, name: "Profound Sampler", catalog_number: null, position: 0 },
+      { label_id: null, discogs_label_id: 8951, name: "Other Line", catalog_number: "OL 2", position: 1 },
+    ]);
+    const { unresolvedCounts } = await import("../src/services/importer/discogs/writer.js");
+    expect(unresolvedCounts(env.db).release_series).toBe(3);
+    // Searchable by series name and series number.
+    expect(unifiedSearch(env.db, "Profound Sampler", { types: ["release"] }).map((r) => r.title).sort()).toEqual(["Series Release 8800", "Series Release 8801"]);
+    expect(unifiedSearch(env.db, "OL 2", { types: ["release"] }).map((r) => r.title)).toEqual(["Series Release 8801"]);
+    // The series entity arrives in the labels dump; reconcile links it.
+    await imp(env, dump("ser-l.xml", "labels", label(8950, null)), "labels");
+    const lid = q(env, "SELECT id FROM labels WHERE discogs_label_id = 8950").id;
+    expect(rows(8800)[0]).toMatchObject({ label_id: lid });
+    expect(unresolvedCounts(env.db).release_series).toBe(1);
+    // A changed release replaces its series rows (no stale ones left behind).
+    await imp(env, dump("ser2.xml", "releases", withSeries(8801, `<series name="Other Line" catno="OL 3" id="8951"/>`)), "releases");
+    expect(rows(8801)).toEqual([{ label_id: null, discogs_label_id: 8951, name: "Other Line", catalog_number: "OL 3", position: 0 }]);
+    // Reindex builds the same series-aware documents as the incremental path.
+    const before = unifiedSearch(env.db, "OL 3", { types: ["release"] }).map((r) => r.id);
+    reindexAll(env.db);
+    expect(unifiedSearch(env.db, "OL 3", { types: ["release"] }).map((r) => r.id)).toEqual(before);
+    expect(before).toHaveLength(1);
   });
 });

@@ -32,6 +32,7 @@ export const IMPORTED: Record<string, string[]> = {
   release: ["release", "release@id", "release@status", "release/title", "release/released", "release/country", "release/notes", "release/data_quality",
     "release/master_id", "release/artists", ...credit("release/artists/artist"), "release/extraartists", ...credit("release/extraartists/artist"),
     "release/labels", "release/labels/label", "release/labels/label@id", "release/labels/label@name", "release/labels/label@catno",
+    "release/series", "release/series/series", "release/series/series@id", "release/series/series@name", "release/series/series@catno",
     "release/companies", "release/companies/company", ...["id", "name", "catno", "entity_type", "entity_type_name"].map((x) => `release/companies/company/${x}`),
     "release/formats", "release/formats/format", "release/formats/format@name", "release/formats/format@qty", "release/formats/format@text",
     "release/formats/format/descriptions", "release/formats/format/descriptions/description",

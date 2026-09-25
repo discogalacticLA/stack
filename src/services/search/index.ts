@@ -81,6 +81,8 @@ const joinCredits = (rows: { name: string; anv: string | null; join_text: string
 export function releaseDocuments(db: DB, ids: number[]): SearchDocument[] {
   const artistsQ = db.prepare("SELECT name, anv, join_text FROM release_artists WHERE release_id = ? ORDER BY position");
   const labelsQ = db.prepare("SELECT name, catalog_number FROM release_labels WHERE release_id = ? ORDER BY position");
+  // release_series arrives in migration 005; reindexAll also runs inside migration 003's hook.
+  const seriesQ = tableExists(db, "release_series") ? db.prepare("SELECT name, catalog_number FROM release_series WHERE release_id = ? ORDER BY position") : null;
   const idsQ = db.prepare("SELECT value, normalized_value FROM release_identifiers WHERE release_id = ? AND identifier_type IN ('Barcode', 'Matrix / Runout', 'Label Code')");
   const relQ = db.prepare("SELECT id, title, year, country, catalog_number, format FROM releases WHERE id = ?");
   const out: SearchDocument[] = [];
@@ -88,15 +90,16 @@ export function releaseDocuments(db: DB, ids: number[]): SearchDocument[] {
     const r = relQ.get(id) as any;
     if (!r) continue;
     const labels = labelsQ.all(id) as any[];
+    const series = (seriesQ?.all(id) ?? []) as any[];
     const codes = new Set<string>();
-    for (const l of labels) if (l.catalog_number) { codes.add(l.catalog_number); const n = normalizeCode(l.catalog_number); if (n) codes.add(n); }
+    for (const l of [...labels, ...series]) if (l.catalog_number) { codes.add(l.catalog_number); const n = normalizeCode(l.catalog_number); if (n) codes.add(n); }
     if (r.catalog_number) { codes.add(r.catalog_number); const n = normalizeCode(r.catalog_number); if (n) codes.add(n); }
     for (const i of idsQ.all(id) as any[]) { codes.add(i.value); if (i.normalized_value) codes.add(i.normalized_value); }
     out.push({
       type: "release", id, title: r.title,
       people: joinCredits(artistsQ.all(id) as any[]),
       codes: [...codes].join(" "),
-      extra: [labels.map((l) => l.name).join(" "), r.year, r.country, r.format].filter(Boolean).join(" "),
+      extra: [labels.map((l) => l.name).join(" "), series.map((x) => x.name).join(" "), r.year, r.country, r.format].filter(Boolean).join(" "),
     });
   }
   return out;
@@ -151,7 +154,8 @@ export function reindexAll(db: DB, backend: SearchBackend = searchBackend(db), b
 // Backend-agnostic bookkeeping kept with the catalog tables: whichever SearchBackend is in use, the
 // catalog is authoritative and `reindexAll` rebuilds the index from it.
 
-const hasStateTable = (db: DB) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_index_state'").get();
+const tableExists = (db: DB, name: string) => !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+const hasStateTable = (db: DB) => tableExists(db, "search_index_state");
 
 export interface SearchIndexState { stale_since: string | null; stale_reason: string | null; last_rebuilt_at: string | null; documents: number | null }
 

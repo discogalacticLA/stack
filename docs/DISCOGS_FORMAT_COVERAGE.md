@@ -1,9 +1,13 @@
 # Discogs dump format coverage
 
-**Status: NOT yet validated against a real Discogs dump.** The official source
-(https://data.discogs.com/) was blocked by the build environment's network policy, and the
-historical S3 location returned 403 AccessDenied (September 2026). Everything below comes from
-the parser's code and the synthetic fixtures. Run the census on a real file to complete it:
+**Status (2026-09-25): validated against the real 2025-12-01 dump** (`discogs_20251201_*`, sha256
+verified against the published CHECKSUM.txt). The census ran on:
+- the first 200,000 artists, labels and masters;
+- the first 50,000 releases.
+
+It ran on the owner's Mac, not in the build environment, which can't reach data.discogs.com.
+
+Re-run the census on any new dump:
 
 ```bash
 npm run catalog -- census data/discogs-dumps/discogs_YYYYMMDD_artists.xml.gz  --limit 200000 --json data/census-artists.json
@@ -48,17 +52,29 @@ or **unknown**. It exits with code 2 if anything is unknown. The lists live in
 
 ## NEW REAL-WORLD VARIANTS FOUND
 
-None recorded yet. **No real dump has been read.**
+| Dump | Unknown paths |
+|---|---|
+| Labels (200k) | none |
+| Artists (200k) | none |
+| Masters (200k) | none |
+| Releases (50k) | **`release/series/series[@name,@catno,@id]`**, in 3,280 of 50,000 releases (6.6%), e.g. `name="Profound Sounds" catno="Vol. 1" id="527772"` |
 
-One thing to look for first (unconfirmed): release series, which Discogs shows on release pages. If
-the dumps carry them, it's probably as something like `release/series/series[@name,@catno,@id]`.
-No fixture has this and the parser doesn't read it. If the census reports a series element, add it
-to the schema (e.g. `release_series`) rather than ignoring it. The census test uses a structure like
-this to prove unknown elements are reported.
+**Series are now imported** (migration 005, `release_series`). Series IDs share the label ID space,
+so each row links to `labels` once that entity is imported, and is reconciled like `release_labels`.
+Series names and numbers are included in release search.
+
+Other real-data observations:
+- **No `images` elements at all** in any of the four dumps.
+- `artist/members/id` (older layout) doesn't occur; members carry `name@id`.
+- `master/videos` appears in about 92% of masters and is deliberately ignored.
+- `release/videos/video/description` holds free text, often a Discogs URL, and is ignored.
 
 ## PARSER CHANGES REQUIRED
 
-None proven yet. They depend on the real census. The parser already handles:
+1. `release/series` was added (parser, writer, reconcile, search, API, coverage list, migration 005,
+   and tests). The synthetic fixture release 401 now carries two series: one resolved, one unresolved.
+
+No other changes were needed. The parser already handles:
 - the `<id>` child and the `id` attribute forms;
 - missing optional elements, and empty elements (`<anv/>`, `<join/>`, `<images/>`);
 - Unicode, including CJK and combining accents;
@@ -67,7 +83,15 @@ None proven yet. They depend on the real census. The parser already handles:
 
 ## INVALID DATA FOUND
 
-None recorded yet. Only synthetic fixtures have been read. They deliberately contain:
+From the census counts on the real files:
+- **Labels:** one of 200,000 has no `name`. It is rejected and logged as `invalid_record`.
+- **Artists:** one of 200,000 has no `name` (rejected and logged). Two have an empty `realname`, and
+  one has an empty name variation (filtered out).
+- **Masters:** about 21 artist credits among 221,534 have no artist `id`. They're stored as
+  name-only credits, since `discogs_artist_id` is NULL and they're never "unresolved".
+- **Releases:** in the 50,000-record import benchmark, 0 records failed.
+
+The synthetic fixtures also deliberately cover:
 - a nameless artist;
 - a titleless release;
 - a non-numeric ID;

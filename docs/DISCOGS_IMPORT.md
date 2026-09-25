@@ -148,6 +148,45 @@ npm run catalog -- import-all data/discogs-dumps --date YYYYMMDD --defer-search
 
 ## Benchmarks
 
+### Real dump: `discogs_20251201_releases.xml.gz`, first 50,000 releases
+
+Run on the owner's MacBook Pro (Node 24) into a fresh database, releases only, with no artists,
+labels or masters imported, so every master link is unresolved.
+
+| Measurement | Incremental search |
+|---|---|
+| Records | 50,000 created, 0 failed |
+| Rate | **3,155/s** (3,615/s in the first 10 s, 2,320/s in the final 5.6 s) |
+| Wall time | 15.8 s |
+
+| Phase | Time | Share of wall time |
+|---|---|---|
+| XML parsing and gunzip | 2.97 s | 19% |
+| Normalising | 0.73 s | 5% |
+| Write | 11.51 s | 73% |
+| ↳ relationship lookups | 0.19 s | |
+| ↳ content hashing | 0.91 s | |
+| ↳ provenance | 0.33 s | |
+| ↳ search index | 0.26 s | 1.6% |
+| ↳ row inserts | ≈6.4 s | 40% |
+| ↳ commit and WAL checkpoint | ≈3.5 s | 22% |
+| Reconcile | 0.64 s | |
+
+| Other measurements | Value |
+|---|---|
+| Peak memory | 381 MB RSS |
+| Database growth | 185.3 MB (3,887 B/release), of which search index 19.7 MB (412 B/release) |
+| Largest tables | extra artists 18.8 MB, releases 18.6 MB, tracks 14.5 MB, video links 14.4 MB, identifiers 10.6 MB |
+| Search latency | titles p50 0.5 ms / p95 4.4 ms; catalog numbers p50 0.3 ms / p95 9.0 ms |
+| Unresolved (expected without the other dumps) | 50,000 master links, 55,447 artist credits, 343,050 extra-artist credits, 79,433 track-artist credits, 59,292 labels |
+
+50,000 records used 34.6 MB of the 10.96 GB compressed file. Extrapolating gives roughly 16 million
+releases, about 62 GB for releases alone at 3.9 KB each, and about 1.5–2 hours at the measured
+rates. This is **an extrapolation**: early records (low IDs) may not be representative, and
+slowdown beyond 50k real rows hasn't been measured.
+
+### Synthetic data
+
 **All numbers below are from SYNTHETIC data** (`scripts/synthetic-discogs-dump.ts`), not a real
 dump. The generator models a plausible record shape:
 - 2–18 tracks, some with sub-tracks;

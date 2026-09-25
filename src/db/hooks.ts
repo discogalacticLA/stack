@@ -33,4 +33,8 @@ export const guards: Record<string, (db: DB) => string | null> = {
     if (dupLabels) return `${dupLabels} label names are duplicated; the pre-003 schema requires unique label names.`;
     return null;
   },
+  "005_release_series.sql": (db) => {
+    const n = (db.prepare("SELECT COUNT(*) AS n FROM release_series").get() as { n: number }).n;
+    return n ? `${n} release series rows would be lost (re-importing the releases dump after reverting would not restore them).` : null;
+  },
 };

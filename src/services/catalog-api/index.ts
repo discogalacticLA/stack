@@ -131,6 +131,7 @@ export function getReleaseRecord(db: DB, id: number) {
     artists: db.prepare("SELECT artist_id, discogs_artist_id, name, anv, join_text, role FROM release_artists WHERE release_id = ? ORDER BY position").all(id),
     extra_artists: db.prepare("SELECT artist_id, discogs_artist_id, name, anv, role, tracks FROM release_extra_artists WHERE release_id = ? AND track_id IS NULL ORDER BY position").all(id),
     labels: db.prepare("SELECT label_id, discogs_label_id, name, catalog_number FROM release_labels WHERE release_id = ? ORDER BY position").all(id),
+    series: db.prepare("SELECT label_id, discogs_label_id, name, catalog_number FROM release_series WHERE release_id = ? ORDER BY position").all(id),
     companies: db.prepare("SELECT rc.company_id, c.discogs_company_id, c.name, rc.role, rc.entity_type, rc.catalog_number FROM release_companies rc LEFT JOIN companies c ON c.id = rc.company_id WHERE rc.release_id = ? ORDER BY rc.position").all(id),
     formats: (db.prepare("SELECT id, name, quantity, text FROM release_formats WHERE release_id = ? ORDER BY position").all(id) as any[]).map((f) => ({
       name: f.name, quantity: f.quantity, text: f.text,
