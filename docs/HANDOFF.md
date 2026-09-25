@@ -49,8 +49,9 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
   - census of 200k artists, labels and masters, and 50k releases;
   - a 50k-release benchmark.
 
-  One unknown structure, `release/series`, was found and is now imported (migration 005). A full
-  import, and scaling beyond 50k real releases, have not been measured. The exact download link
+  One unknown structure, `release/series`, was found and is now imported (migration 005).
+  Benchmarks were run up to 1M real releases (maintained indexes) and 300k (bulk mode). A full
+  import has not been run yet. The exact download link
   host (data.discogs.com or S3) is still unconfirmed; the file naming and year folders are
   confirmed.
 - No browser walkthrough or screenshots were produced for the latest milestone.
@@ -67,19 +68,24 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 ## Full-import gate
 
-Recommendation: **B**, now backed by real measurements. Move catalog storage to PostgreSQL before
-loading the complete catalog.
+**Updated recommendation: A for a local full import on SQLite, using bulk mode. B (PostgreSQL)
+before any hosting.**
 
-On the real dump (owner's Mac), SQLite import speed fell from 3,646/s to ~470/s over the first 1M
-releases (4 GB). At that decay the ~16M-release catalog would take days, and search p95 passed
-200 ms. A SQLite cache/sync tuning test is pending; it could soften the curve for local sampling,
-but it doesn't remove the single-writer and hosting constraints. See DISCOGS_IMPORT.md →
-Benchmarks and POSTGRES_READINESS.md.
+- Without bulk mode, SQLite import speed on the owner's Mac decayed from 3,646/s to ~470/s over
+  1M real releases.
+- Profiling traced this to 36 secondary indexes on scattered values. With those deferred
+  (`--bulk`), the real dump imports at a flat ~5,250/s: 300k releases in 80 s, including every
+  rebuild.
+- The projected full releases load is roughly 1.3–1.5 hours and ~63 GB.
+- Next: a 1M-release bulk run to confirm the curve stays flat. Then a fully linked import into a
+  dedicated database (`import-all --bulk`), with at least ~100 GB of free disk space.
+- PostgreSQL is still required before hosting: single writer, paid infrastructure, concurrency.
+  See POSTGRES_READINESS.md.
 
 ## Suggested next steps
 
-1. Run the tuned 300k benchmark on the Mac (DISCOGS_IMPORT.md) to see how much of the decay is
-   cache/fsync. Then do a fully linked sample: artists + labels + masters, then releases.
+1. Run a 1M-release bulk benchmark on the Mac. If it stays flat, do a full `import-all --bulk` into a
+   dedicated database file.
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.

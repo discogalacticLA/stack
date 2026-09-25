@@ -278,6 +278,36 @@ slowdown beyond 50k real rows hasn't been measured.
      | Maintained indexes | 124 s | 178 s | ~1,690/s |
      | Bulk mode | 66 s | 137 s (includes 6.7 s index rebuild and 10 s search rebuild) | steady ~2,550/s |
 
+8. **Bulk mode on the real dump (owner's Mac, first 300,000 releases, `--defer-indexes --defer-search`):**
+
+   | Measurement | Value |
+   |---|---|
+   | Rate | ~5,250/s in every interval (5,299 → 5,195/s); no decay |
+   | Load | 73.3 s |
+   | ↳ parse | 26.6 s |
+   | ↳ write | 36.6 s |
+   | ↳ full reconcile | 6.1 s |
+   | Index rebuild (36 indexes) | 9.8 s |
+   | Search rebuild | 6.5 s |
+   | Total | 79.9 s |
+   | Maintained-index runs, same slice, for comparison | ~170 s |
+   | Database | 1,107.5 MB (3,871 B/release), search index 107.9 MB |
+   | Peak memory | 433 MB RSS |
+   | Search latency | titles p50 0.9 ms / p95 31 ms; catalog numbers p50 0.4 ms / p95 70 ms |
+
+   **Projection for the full releases dump.** 300k releases used 200.3 MB of the 10.96 GB file,
+   which suggests about 16.4M releases in total. That's an estimate: early records may not be
+   representative.
+
+   | Stage | Estimate |
+   |---|---|
+   | Load at ~5,250/s | ~52 min |
+   | Index rebuild | ~10–15 min (a sort, so slightly worse than linear) |
+   | Search rebuild | ~6 min |
+   | Full reconcile | ~5–10 min |
+   | **Total** | **roughly 1.3–1.5 h** |
+   | Database size | ~63 GB for releases alone (artists, labels and masters add a few GB) |
+
 The tuned-cache run, for reference:
 
 ```bash
