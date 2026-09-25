@@ -37,6 +37,11 @@ const mb = (b: number) => Math.round((b / 1024 / 1024) * 10) / 10;
 const fileBytes = (p: string) => ["", "-wal", "-shm"].reduce((a, s) => a + (fs.existsSync(p + s) ? fs.statSync(p + s).size : 0), 0);
 
 const db = openDatabase(dbPath);
+// Experiment knobs (defaults = what the app uses today).
+if (flag("cache-mb")) db.pragma(`cache_size = -${Number(flag("cache-mb")) * 1024}`);
+if (flag("mmap-mb")) db.pragma(`mmap_size = ${Number(flag("mmap-mb")) * 1024 * 1024}`);
+if (flag("sync")) db.pragma(`synchronous = ${flag("sync")!.toUpperCase()}`);
+const pragmas = { cache_size: db.pragma("cache_size", { simple: true }), mmap_size: db.pragma("mmap_size", { simple: true }), synchronous: db.pragma("synchronous", { simple: true }) };
 const pageSizes = () => {
   db.pragma("wal_checkpoint(TRUNCATE)");
   const rows = db.prepare("SELECT name, SUM(pgsize) AS bytes FROM dbstat GROUP BY name").all() as { name: string; bytes: number }[];
@@ -91,7 +96,7 @@ const latency = (qs: string[]) => {
 
 const seconds = importMs / 1000;
 const report = {
-  file: path.basename(file), type: r.type, limit, searchMode: r.searchMode,
+  file: path.basename(file), type: r.type, limit, searchMode: r.searchMode, pragmas,
   records: { processed: r.processed, created: r.created, updated: r.updated, unchanged: r.unchanged, failed: r.failed },
   unresolved: unresolvedCounts(db),
   elapsedSeconds: +seconds.toFixed(2), recordsPerSecond: Math.round(r.processed / seconds),

@@ -185,6 +185,69 @@ releases, about 62 GB for releases alone at 3.9 KB each, and about 1.5–2 hours
 rates. This is **an extrapolation**: early records (low IDs) may not be representative, and
 slowdown beyond 50k real rows hasn't been measured.
 
+### Real dump: first 1,000,000 releases (owner's Mac, incremental search)
+
+| Measurement | Value |
+|---|---|
+| Records | 1,000,000 created, 0 failed |
+| Average rate | **711/s**; wall time 1,407 s (23.5 min) |
+| Database | 3,958.8 MB (4,151 B/release), of which search index 352.7 MB |
+| Peak memory | 414 MB RSS (flat) |
+| Title search | p50 2.9 ms, p95 223 ms, max 356 ms |
+| Catalog-number search | p50 2.1 ms, p95 210 ms, max 353 ms |
+
+**Rate as the catalog grew:**
+
+| Rows so far | 0 | 150k | 330k | 600k | 1M |
+|---|---|---|---|---|---|
+| Rate | 3,646/s | ~2,000/s | ~1,000/s | ~650/s | ~470/s |
+
+**Where the time went:**
+
+| Part | Time | Share |
+|---|---|---|
+| XML parsing and gunzip | 60 s | 4% |
+| Normalising | 14 s | 1% |
+| Row inserts | ≈585 s | 42% |
+| Commit and WAL checkpoint | ≈540 s | 38% |
+| Reconcile | 165 s | 12% |
+| Lookups, hashing, provenance and search together | 43 s | 3% |
+
+**Unresolved without the other dumps:**
+- 1,000,000 master links;
+- 1,123,098 artist credits, 9,747,966 extra-artist credits and 2,129,733 track-artist credits;
+- 1,211,272 labels and 69,708 series.
+
+**Findings:**
+1. **Throughput decays roughly in inverse proportion to database size.** That rules out a full
+   ~16M-release load on this setup: it would take days. The same 300k test in the build
+   environment, with a realistic Discogs ID spread, did **not** degrade (1,844 → 1,762/s). So the
+   decay depends on the machine (storage and fsync behaviour, page cache, possibly power
+   settings) or on the real record shape. The next measurement (below) tests the SQLite cache and
+   sync settings on the Mac itself.
+2. **Reconcile scanned every unresolved row in the catalog on every run** (14M rows at 1M
+   releases). **Fixed.** Each run now records the Discogs IDs it wrote (`temp.reconcile_scope`)
+   and links only rows that point at them, pinned to the unresolved-reference indexes
+   (migration 006).
+   - References to entities from earlier runs were already resolved when the rows were written,
+     so scoped linking is complete for a normal run. A test proves it gives the same result as a
+     full reconcile.
+   - Resumed runs, and `catalog reconcile`, still run the full version, which includes stale-link
+     repair.
+   - In the build environment's 300k test, reconcile went from 2.6 s to 1.1 s; the remainder is
+     the unresolved count. The releases run no longer rescans at all. The cost is about 5% slower
+     writes from the extra partial indexes.
+3. **Search tail latency grows** (p95 over 200 ms at 1M), although the medians stay low.
+
+Next measurement on the Mac, the same 300k slice with a large SQLite page cache and
+`synchronous=NORMAL`:
+
+```bash
+npx tsx scripts/benchmark-import.ts --file ~/Downloads/discogs_20251201_releases.xml.gz --limit 300000 --db data/bench-300k-tuned.db --cache-mb 1024 --sync normal --progress --out data/bench-300k-tuned.json
+```
+
+Compare it with the 1M run's rate at 300k (~1,250/s).
+
 ### Synthetic data
 
 **All numbers below are from SYNTHETIC data** (`scripts/synthetic-discogs-dump.ts`), not a real

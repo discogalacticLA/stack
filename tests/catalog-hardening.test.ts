@@ -327,3 +327,56 @@ describe("release series (found in the real 2025-12-01 dump)", () => {
     expect(before).toHaveLength(1);
   });
 });
+
+describe("run-scoped reconciliation", () => {
+  it("each run links only references to what it imported; results match a full reconcile", async () => {
+    // Out of order: releases → labels → artists → masters, each run reconciling only its own scope.
+    const env = setup();
+    for (const t of ["releases", "labels", "artists", "masters"]) await runImport(env.db, { file: path.join(FIX, `${t}.xml.gz`), logDir: logDir() });
+    const scoped = unresolvedFor(env);
+    // A full reconcile afterwards finds nothing more to link.
+    const full = reconcileReferences(env.db);
+    expect(Object.entries(full).filter(([k]) => !k.startsWith("stale_")).every(([, v]) => v === 0)).toBe(true);
+    expect(unresolvedFor(env)).toEqual(scoped);
+    // Same end state as the recommended order.
+    const ordered = setup();
+    for (const t of ["artists", "labels", "masters", "releases"]) await runImport(ordered.db, { file: path.join(FIX, `${t}.xml.gz`), logDir: logDir() });
+    expect(scoped).toEqual(unresolvedFor(ordered));
+  });
+
+  it("a scoped reconcile ignores rows outside the run's ids; a full one (and a resumed run) covers everything", async () => {
+    const env = setup();
+    await imp(env, dump("sc-a.xml", "artists", `<artist><id>8601</id><name>Scope A</name></artist>\n<artist><id>8602</id><name>Scope B</name></artist>`), "artists");
+    await imp(env, dump("sc-r.xml", "releases", release(8660, null)), "releases");
+    // Break two credits so they point at existing artists but are unresolved.
+    const rid = q(env, "SELECT id FROM releases WHERE discogs_release_id = 8660").id;
+    env.db.prepare("INSERT INTO release_artists (release_id, artist_id, discogs_artist_id, name, position) VALUES (?, NULL, 8601, 'Scope A', 5), (?, NULL, 8602, 'Scope B', 6)").run(rid, rid);
+    // An artists run that only contains 8601 links 8601, not 8602.
+    await imp(env, dump("sc-a2.xml", "artists", `<artist><id>8601</id><name>Scope A</name></artist>`), "artists");
+    const cred = (d: number) => q(env, "SELECT artist_id FROM release_artists WHERE release_id = ? AND discogs_artist_id = ?", rid, d).artist_id;
+    expect(cred(8601)).not.toBeNull();
+    expect(cred(8602)).toBeNull();
+    expect(reconcileReferences(env.db).release_artists).toBe(1);
+    expect(cred(8602)).not.toBeNull();
+  });
+
+  it("scoped reconcile statements use the unresolved-reference indexes (no scan of all unresolved rows)", async () => {
+    const env = setup();
+    const { resetReconcileScope } = await import("../src/services/importer/discogs/writer.js");
+    resetReconcileScope(env.db);
+    // Capture the exact SQL reconcileReferences runs for each scope, then check each query plan.
+    const seen: string[] = [];
+    const orig = env.db.prepare.bind(env.db);
+    (env.db as any).prepare = (sql: string) => { if (/^\s*UPDATE/.test(sql)) seen.push(sql); return orig(sql); };
+    for (const scope of ["artist", "label", "master", "release"] as const) reconcileReferences(env.db, { scope });
+    (env.db as any).prepare = orig;
+    expect(seen.length).toBe(12); // 6 artist, 4 label, 1 master, 1 release
+    for (const sql of seen) {
+      const plan = (env.db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[]).map((r) => r.detail).join(" | ");
+      const table = /^\s*UPDATE (\w+)/.exec(sql)![1];
+      expect(plan, table).toMatch(/_unresolved/);
+      expect(plan, table).not.toMatch(new RegExp(`SCAN ${table}\\b`));
+      expect(plan, table).not.toMatch(/USING INDEX \w+_(artist|label|release|company) \((artist_id|label_id)=\?\)/);
+    }
+  });
+});

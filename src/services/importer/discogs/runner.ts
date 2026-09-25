@@ -15,11 +15,12 @@ import path from "node:path";
 import type { DB } from "../../../db/index.js";
 import { FatalImportError, streamRecords, type XNode } from "./stream.js";
 import { artistFromNode, labelFromNode, masterFromNode, RecordError, releaseFromNode } from "./normalize.js";
-import { DiscogsCatalogWriter, reconcileReferences, unresolvedCounts, type BatchResult, type WriterTimings } from "./writer.js";
+import { DiscogsCatalogWriter, reconcileReferences, resetReconcileScope, unresolvedCounts, type BatchResult, type WriterTimings } from "./writer.js";
 import { markSearchStale, reindexAll, searchBackend } from "../../search/index.js";
 
 export type DumpType = "artists" | "labels" | "masters" | "releases";
 export const IMPORT_ORDER: DumpType[] = ["artists", "labels", "masters", "releases"];
+const SCOPE = { artists: "artist", labels: "label", masters: "master", releases: "release" } as const;
 const RECORD_TAG: Record<DumpType, string> = { artists: "artist", labels: "label", masters: "master", releases: "release" };
 const NORMALIZE = { artists: artistFromNode, labels: labelFromNode, masters: masterFromNode, releases: releaseFromNode } as const;
 const MAX_ERRORS_IN_DB = 10_000;
@@ -135,6 +136,7 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
     unchanged: run0.records_unchanged, failed: run0.records_failed, skippedLocal: run0.records_skipped_local, unresolved: run0.unresolved_references,
     lastExternalId: run0.last_external_id, bytesRead: 0, fileSize, recordsPerSecond: 0, elapsedSeconds: 0,
   };
+  resetReconcileScope(db);
   const writer = new DiscogsCatalogWriter(db, runId, now, { search: deferSearch ? null : searchBackend(db) });
   const phase = { normalize: 0, write: 0, reconcile: 0 };
   const wallStart = performance.now();
@@ -233,7 +235,8 @@ export async function runImport(db: DB, opts: RunOptions): Promise<ImportResult>
     }
     flushWithWarnings();
     const tr = performance.now();
-    const reconciled = reconcileReferences(db);
+    // A resumed run didn't record the ids written before the interruption, so it reconciles fully.
+    const reconciled = reconcileReferences(db, skip > 0 ? {} : { scope: SCOPE[type] });
     // Store what is still unresolved after reconciliation (catalog-wide), not the write-time count.
     const remaining = unresolvedCounts(db);
     p.unresolved = Object.values(remaining).reduce((a, b) => a + b, 0);
@@ -288,7 +291,7 @@ export async function runImportAll(db: DB, opts: ImportAllOptions) {
   }
   let reindexed: { documents: number; ms: number } | null = null;
   if (opts.deferSearch && runs.length) {
-    reconcileReferences(db);
+    // Each run already reconciled the references to what it imported.
     const t = performance.now();
     const documents = reindexAll(db);
     reindexed = { documents, ms: performance.now() - t };

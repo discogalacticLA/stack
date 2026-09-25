@@ -51,6 +51,7 @@ the domain functions and the routes.
 | `COLLATE NOCASE` (10 uses) | sorting and label lookup | `lower(x)`, an ICU case-insensitive collation, or `citext` |
 | `strftime('%Y-%m-%dT%H:%M:%fZ','now')` | 003 seed rows | `now()`; also move `TEXT` timestamps to `timestamptz` |
 | `PRAGMA journal_mode/foreign_keys/busy_timeout/foreign_key_check` | `db/index.ts` | Not needed; FK checks are always on |
+| `INDEXED BY` on scoped reconcile UPDATEs | `writer.ts` reconcile | Drop the hint. Postgres plans `col = ANY($1)` against partial indexes itself; verify with `EXPLAIN` |
 | `sqlite_master`, `dbstat` | search state guard, benchmark | `information_schema`, `pg_total_relation_size` |
 | `.changes` on run results | reconcile, services | `rowCount` |
 | `-- foreign_keys: off` table-rebuild migrations, `RENAME COLUMN` sequences | 002, 003 and their down files | Not ported: write one baseline schema (`001_postgres_baseline.sql`) from the current SQLite schema |
@@ -74,7 +75,7 @@ the domain functions and the routes.
 ## MIGRATION RISKS
 
 - **Async ripple.** Converting the sync call sites changes almost every catalog function signature,
-  and the route handlers that call them. It's mechanical but wide. The test suite (130 tests) is the
+  and the route handlers that call them. It's mechanical but wide. The test suite (133 tests) is the
   safety net.
 - **Search behaviour changes.**
   - Ranking: FTS5 bm25 with weights 10/3/6/1 will not rank the same as `ts_rank_cd`.
@@ -96,6 +97,12 @@ the domain functions and the routes.
   DISCOGS_IMPORT.md) is paid infrastructure. **That needs an owner decision.**
 
 ## Measured facts that bear on the decision
+
+**Real dump, 1M releases (owner's Mac):**
+- 711/s on average; the rate decays from 3,646/s to ~470/s as the database grows to 4 GB;
+- commit + WAL checkpoint was 38% of the time and row inserts 42%;
+- search p95 over 200 ms;
+- at this decay, the full catalog would take days on SQLite on that machine.
 
 **Real dump, 50k releases (owner's Mac):**
 - 3,155/s;

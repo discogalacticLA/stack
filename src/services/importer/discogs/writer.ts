@@ -67,6 +67,12 @@ export class DiscogsCatalogWriter {
   constructor(private db: DB, private runId: number, private now: () => string, opts: WriterOptions = {}) {
     this.sourceId = (db.prepare("SELECT id FROM catalog_sources WHERE name = 'discogs'").get() as { id: number }).id;
     this.search = opts.search === undefined ? searchBackend(db) : opts.search;
+    db.exec("CREATE TEMP TABLE IF NOT EXISTS reconcile_scope (entity TEXT NOT NULL, ext INTEGER NOT NULL, PRIMARY KEY (entity, ext)) WITHOUT ROWID");
+  }
+
+  /** Records the batch's Discogs ids so the run's reconcile only looks at rows pointing at them. */
+  private scope(entity: ScopeEntity, ids: number[]) {
+    this.st("INSERT OR IGNORE INTO temp.reconcile_scope (entity, ext) SELECT ?, value FROM json_each(?)").run(entity, JSON.stringify(ids));
   }
 
   private timed<T>(phase: keyof WriterTimings, fn: () => T): T {
@@ -142,6 +148,7 @@ export class DiscogsCatalogWriter {
   private writeArtistsBatch(input: ArtistRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
+    this.scope("artist", records.map((r) => r.discogs_id));
     const now = this.now();
     const existing = this.lookup("artists", "discogs_artist_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("artist", [...existing.values()].map((e) => e.id));
@@ -193,6 +200,7 @@ export class DiscogsCatalogWriter {
   private writeLabelsBatch(input: LabelRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
+    this.scope("label", records.map((r) => r.discogs_id));
     const now = this.now();
     const existing = this.lookup("labels", "discogs_label_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("label", [...existing.values()].map((e) => e.id));
@@ -233,6 +241,7 @@ export class DiscogsCatalogWriter {
   private writeMastersBatch(input: MasterRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
+    this.scope("master", records.map((r) => r.discogs_id));
     const now = this.now();
     const existing = this.lookup("masters", "discogs_master_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("master", [...existing.values()].map((e) => e.id));
@@ -282,6 +291,7 @@ export class DiscogsCatalogWriter {
   private writeReleasesBatch(input: ReleaseRecord[]): BatchResult {
     const res = empty();
     const records = dedupe(input, res);
+    this.scope("release", records.map((r) => r.discogs_id));
     const now = this.now();
     const existing = this.lookup("releases", "discogs_release_id", records.map((r) => r.discogs_id), ", local_edited_at");
     const prov = this.provenance("release", [...existing.values()].map((e) => e.id));
@@ -397,38 +407,83 @@ function creditLine(cs: Credit[]): string {
   return cs.map((c) => (c.anv || c.name) + joinText(c.join)).join("").replace(/\s+/g, " ").trim();
 }
 
+export type ScopeEntity = "artist" | "label" | "master" | "release";
+
+/** Per-connection list of Discogs ids written by the current run, used to scope reconciliation. */
+export function resetReconcileScope(db: DB) {
+  db.exec("CREATE TEMP TABLE IF NOT EXISTS reconcile_scope (entity TEXT NOT NULL, ext INTEGER NOT NULL, PRIMARY KEY (entity, ext)) WITHOUT ROWID");
+  db.exec("DELETE FROM temp.reconcile_scope");
+}
+
 /**
  * Links rows whose referenced entity has since been imported (e.g. releases imported before their
  * master, credits for artists imported later). Safe to run repeatedly. Returns rows resolved.
+ *
+ * - Full (no scope): every unresolved row in the catalog, after repairing any stale id/FK pairs.
+ *   Cost grows with the number of unresolved rows (165 s at 1M real releases), so it's for
+ *   `catalog reconcile`, resumed runs and tests.
+ * - Scoped (`{ scope: "artist" }` etc.): only rows pointing at the ids this run wrote (recorded in
+ *   temp.reconcile_scope by the writer). References to entities imported by *earlier* runs were
+ *   already resolved when the rows were written, so this is complete for a normal run.
  */
-export function reconcileReferences(db: DB): Record<string, number> {
-  const run = (sql: string) => db.prepare(sql).run().changes;
-  return db.transaction(() => ({
-    // Repair first: an internal link that no longer matches its Discogs id is cleared, so the
-    // resolve steps below can link it to the right entity (or leave it NULL until it's imported).
-    // Only Discogs-sourced rows without local edits are touched. Heals rows written before the
-    // writer stopped using COALESCE(?, fk) on these pairs.
-    ...repairStaleReferences(db),
-    release_master: run(`UPDATE releases SET master_id = (SELECT m.id FROM masters m WHERE m.discogs_master_id = releases.discogs_master_id)
-      WHERE master_id IS NULL AND discogs_master_id IS NOT NULL AND EXISTS (SELECT 1 FROM masters m WHERE m.discogs_master_id = releases.discogs_master_id)`),
-    master_main_release: run(`UPDATE masters SET main_release_id = (SELECT r.id FROM releases r WHERE r.discogs_release_id = masters.main_release_discogs_id)
-      WHERE main_release_id IS NULL AND main_release_discogs_id IS NOT NULL AND EXISTS (SELECT 1 FROM releases r WHERE r.discogs_release_id = masters.main_release_discogs_id)`),
-    ...Object.fromEntries(["release_artists", "release_extra_artists", "release_track_artists", "master_artists"].map((t) => [t, run(
-      `UPDATE ${t} SET artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = ${t}.discogs_artist_id)
-       WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = ${t}.discogs_artist_id)`)])),
-    release_labels: run(`UPDATE release_labels SET label_id = (SELECT l.id FROM labels l WHERE l.discogs_label_id = release_labels.discogs_label_id)
-      WHERE label_id IS NULL AND discogs_label_id IS NOT NULL AND EXISTS (SELECT 1 FROM labels l WHERE l.discogs_label_id = release_labels.discogs_label_id)`),
-    release_series: run(`UPDATE release_series SET label_id = (SELECT l.id FROM labels l WHERE l.discogs_label_id = release_series.discogs_label_id)
-      WHERE label_id IS NULL AND discogs_label_id IS NOT NULL AND EXISTS (SELECT 1 FROM labels l WHERE l.discogs_label_id = release_series.discogs_label_id)`),
-    release_primary_label: run(`UPDATE releases SET label_id = (SELECT rl.label_id FROM release_labels rl WHERE rl.release_id = releases.id ORDER BY rl.position LIMIT 1)
-      WHERE label_id IS NULL AND discogs_release_id IS NOT NULL AND EXISTS (SELECT 1 FROM release_labels rl WHERE rl.release_id = releases.id AND rl.position = 0 AND rl.label_id IS NOT NULL)`),
-    label_parent: run(`UPDATE labels SET parent_label_id = (SELECT p.id FROM labels p WHERE p.discogs_label_id = labels.parent_discogs_label_id)
-      WHERE parent_label_id IS NULL AND parent_discogs_label_id IS NOT NULL AND EXISTS (SELECT 1 FROM labels p WHERE p.discogs_label_id = labels.parent_discogs_label_id)`),
-    artist_aliases: run(`UPDATE artist_aliases SET alias_artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = artist_aliases.discogs_alias_id)
-      WHERE alias_artist_id IS NULL AND discogs_alias_id IS NOT NULL AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = artist_aliases.discogs_alias_id)`),
-    artist_members: run(`UPDATE artist_members SET member_artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = artist_members.discogs_member_id)
-      WHERE member_artist_id IS NULL AND discogs_member_id IS NOT NULL AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = artist_members.discogs_member_id)`),
-  }))();
+export function reconcileReferences(db: DB, opts: { scope?: ScopeEntity } = {}): Record<string, number> {
+  const run = (sql: string, ...a: unknown[]) => db.prepare(sql).run(...a).changes;
+  const scope = opts.scope;
+  const inScope = (col: string, entity: ScopeEntity) => (scope ? ` AND ${col} IN (SELECT ext FROM temp.reconcile_scope WHERE entity = '${entity}')` : "");
+  // In scoped mode, pin each UPDATE to its unresolved-reference index. Otherwise SQLite's planner
+  // tends to pick the FK index (fk IS NULL), which walks every unresolved row: the catalog-wide
+  // scan this mode exists to avoid. (SQLite-specific; see docs/POSTGRES_READINESS.md.)
+  const UNRESOLVED_INDEX: Record<string, string> = {
+    release_artists: "release_artists_unresolved", release_extra_artists: "release_extra_artists_unresolved",
+    release_track_artists: "release_track_artists_unresolved", master_artists: "master_artists_unresolved",
+    artist_aliases: "artist_aliases_unresolved", artist_members: "artist_members_unresolved", release_labels: "release_labels_unresolved",
+    release_series: "release_series_unresolved", labels: "labels_unresolved_parent", releases: "releases_unresolved_master", masters: "masters_unresolved_main_release",
+  };
+  const tbl = (t: string) => (scope ? `${t} INDEXED BY ${UNRESOLVED_INDEX[t]}` : t);
+  const want = (entity: ScopeEntity) => !scope || scope === entity;
+  return db.transaction(() => {
+    const out: Record<string, number> = {};
+    // Repair first (full mode only): an internal link that no longer matches its Discogs id is
+    // cleared, so the resolve steps below can link it to the right entity (or leave it NULL until
+    // it's imported). Only Discogs-sourced rows without local edits are touched. Heals rows written
+    // before the writer stopped using COALESCE(?, fk) on these pairs.
+    if (!scope) Object.assign(out, repairStaleReferences(db));
+    if (want("master")) {
+      out.release_master = run(`UPDATE ${tbl("releases")} SET master_id = (SELECT m.id FROM masters m WHERE m.discogs_master_id = releases.discogs_master_id)
+        WHERE master_id IS NULL AND discogs_master_id IS NOT NULL${inScope("discogs_master_id", "master")} AND EXISTS (SELECT 1 FROM masters m WHERE m.discogs_master_id = releases.discogs_master_id)`);
+    }
+    if (want("release")) {
+      out.master_main_release = run(`UPDATE ${tbl("masters")} SET main_release_id = (SELECT r.id FROM releases r WHERE r.discogs_release_id = masters.main_release_discogs_id)
+        WHERE main_release_id IS NULL AND main_release_discogs_id IS NOT NULL${inScope("main_release_discogs_id", "release")} AND EXISTS (SELECT 1 FROM releases r WHERE r.discogs_release_id = masters.main_release_discogs_id)`);
+    }
+    if (want("artist")) {
+      for (const t of ["release_artists", "release_extra_artists", "release_track_artists", "master_artists"]) {
+        out[t] = run(`UPDATE ${tbl(t)} SET artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = ${t}.discogs_artist_id)
+          WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL${inScope("discogs_artist_id", "artist")} AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = ${t}.discogs_artist_id)`);
+      }
+      out.artist_aliases = run(`UPDATE ${tbl("artist_aliases")} SET alias_artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = artist_aliases.discogs_alias_id)
+        WHERE alias_artist_id IS NULL AND discogs_alias_id IS NOT NULL${inScope("discogs_alias_id", "artist")} AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = artist_aliases.discogs_alias_id)`);
+      out.artist_members = run(`UPDATE ${tbl("artist_members")} SET member_artist_id = (SELECT a.id FROM artists a WHERE a.discogs_artist_id = artist_members.discogs_member_id)
+        WHERE member_artist_id IS NULL AND discogs_member_id IS NOT NULL${inScope("discogs_member_id", "artist")} AND EXISTS (SELECT 1 FROM artists a WHERE a.discogs_artist_id = artist_members.discogs_member_id)`);
+    }
+    if (want("label")) {
+      // Primary label first, while the position-0 release_labels row is still in the unresolved index.
+      out.release_primary_label = run(scope
+        ? `UPDATE releases SET label_id = (SELECT l.id FROM release_labels rl JOIN labels l ON l.discogs_label_id = rl.discogs_label_id WHERE rl.release_id = releases.id AND rl.position = 0)
+            WHERE label_id IS NULL AND id IN (SELECT release_id FROM release_labels INDEXED BY release_labels_unresolved WHERE label_id IS NULL AND position = 0${inScope("discogs_label_id", "label")})
+            AND EXISTS (SELECT 1 FROM release_labels rl JOIN labels l ON l.discogs_label_id = rl.discogs_label_id WHERE rl.release_id = releases.id AND rl.position = 0)`
+        : `UPDATE releases SET label_id = (SELECT l.id FROM release_labels rl JOIN labels l ON l.discogs_label_id = rl.discogs_label_id WHERE rl.release_id = releases.id AND rl.position = 0)
+            WHERE label_id IS NULL AND discogs_release_id IS NOT NULL
+            AND EXISTS (SELECT 1 FROM release_labels rl JOIN labels l ON l.discogs_label_id = rl.discogs_label_id WHERE rl.release_id = releases.id AND rl.position = 0)`);
+      for (const [t, fk] of [["release_labels", "label_id"], ["release_series", "label_id"]]) {
+        out[t] = run(`UPDATE ${tbl(t)} SET ${fk} = (SELECT l.id FROM labels l WHERE l.discogs_label_id = ${t}.discogs_label_id)
+          WHERE ${fk} IS NULL AND discogs_label_id IS NOT NULL${inScope("discogs_label_id", "label")} AND EXISTS (SELECT 1 FROM labels l WHERE l.discogs_label_id = ${t}.discogs_label_id)`);
+      }
+      out.label_parent = run(`UPDATE ${tbl("labels")} SET parent_label_id = (SELECT p.id FROM labels p WHERE p.discogs_label_id = labels.parent_discogs_label_id)
+        WHERE parent_label_id IS NULL AND parent_discogs_label_id IS NOT NULL${inScope("parent_discogs_label_id", "label")} AND EXISTS (SELECT 1 FROM labels p WHERE p.discogs_label_id = labels.parent_discogs_label_id)`);
+    }
+    return out;
+  })();
 }
 
 /**

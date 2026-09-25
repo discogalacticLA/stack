@@ -6,7 +6,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 - Local prototype only. It is not production-ready and not deployed, and it has no real payments.
 - Branch `claude/music-archive-marketplace-ibxhs3` in the `stack` repo.
-- `npm run check` runs the typecheck and 130 vitest tests across 9 files, all passing at the time
+- `npm run check` runs the typecheck and 133 vitest tests across 9 files, all passing at the time
   of writing.
 
 ## Milestones done
@@ -67,14 +67,19 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 ## Full-import gate
 
-Recommendation: **B.** Move catalog storage to PostgreSQL before loading the complete catalog.
-Meanwhile, keep validating real samples (up to about 1M releases) on SQLite. The reasoning, from
-synthetic measurements, is in DISCOGS_IMPORT.md → Benchmarks and in POSTGRES_READINESS.md.
+Recommendation: **B**, now backed by real measurements. Move catalog storage to PostgreSQL before
+loading the complete catalog.
+
+On the real dump (owner's Mac), SQLite import speed fell from 3,646/s to ~470/s over the first 1M
+releases (4 GB). At that decay the ~16M-release catalog would take days, and search p95 passed
+200 ms. A SQLite cache/sync tuning test is pending; it could soften the curve for local sampling,
+but it doesn't remove the single-writer and hosting constraints. See DISCOGS_IMPORT.md →
+Benchmarks and POSTGRES_READINESS.md.
 
 ## Suggested next steps
 
-1. Benchmark a 1M-release real slice, in both search modes, to measure scaling on real data. Then
-   do a fully linked sample: artists + labels + masters, then releases.
+1. Run the tuned 300k benchmark on the Mac (DISCOGS_IMPORT.md) to see how much of the decay is
+   cache/fsync. Then do a fully linked sample: artists + labels + masters, then releases.
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.
