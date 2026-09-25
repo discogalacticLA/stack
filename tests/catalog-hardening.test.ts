@@ -252,16 +252,17 @@ describe("deferred-search bulk import", () => {
 function unresolvedFor(env: TestEnv) {
   return Object.fromEntries(Object.entries({
     releases_without_master: "SELECT COUNT(*) AS n FROM releases WHERE master_id IS NULL AND discogs_master_id IS NOT NULL",
-    release_artist_credits: "SELECT COUNT(*) AS n FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
-    extra_artist_credits: "SELECT COUNT(*) AS n FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
+    release_artist_credits: "SELECT COUNT(*) AS n FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND discogs_artist_id NOT IN (194, 355, 118760)",
+    extra_artist_credits: "SELECT COUNT(*) AS n FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND discogs_artist_id NOT IN (194, 355, 118760)",
     release_labels: "SELECT COUNT(*) AS n FROM release_labels WHERE label_id IS NULL AND discogs_label_id IS NOT NULL",
     release_series: "SELECT COUNT(*) AS n FROM release_series WHERE label_id IS NULL AND discogs_label_id IS NOT NULL",
-    master_artist_credits: "SELECT COUNT(*) AS n FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
-    track_artist_credits: "SELECT COUNT(*) AS n FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL",
+    master_artist_credits: "SELECT COUNT(*) AS n FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND discogs_artist_id NOT IN (194, 355, 118760)",
+    track_artist_credits: "SELECT COUNT(*) AS n FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND discogs_artist_id NOT IN (194, 355, 118760)",
     artist_aliases: "SELECT COUNT(*) AS n FROM artist_aliases WHERE alias_artist_id IS NULL AND discogs_alias_id IS NOT NULL",
     artist_members: "SELECT COUNT(*) AS n FROM artist_members WHERE member_artist_id IS NULL AND discogs_member_id IS NOT NULL",
     label_parents: "SELECT COUNT(*) AS n FROM labels WHERE parent_label_id IS NULL AND parent_discogs_label_id IS NOT NULL",
     masters_main_release: "SELECT COUNT(*) AS n FROM masters WHERE main_release_id IS NULL AND main_release_discogs_id IS NOT NULL",
+    placeholder_artist_credits: "SELECT (SELECT COUNT(*) FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IN (194, 355, 118760)) + (SELECT COUNT(*) FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IN (194, 355, 118760)) + (SELECT COUNT(*) FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IN (194, 355, 118760)) + (SELECT COUNT(*) FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IN (194, 355, 118760)) AS n",
   }).map(([k, sql]) => [k, q(env, sql).n]));
 }
 
@@ -475,5 +476,44 @@ describe("bulk-load mode (--defer-indexes)", () => {
     expect(normalRun.indexes.restoredBeforeRun.length).toBeGreaterThan(0);
     expect(indexDefs(env)).toEqual(before);
     expect(restoreDeferredIndexes(env.db).restored).toEqual([]);
+  });
+});
+
+describe("real-dump reference conventions (2025-12-01 import)", () => {
+  it("a 0 reference means 'none': no fake Discogs id, not counted as unresolved", async () => {
+    const env = setup();
+    const { unresolvedCounts } = await import("../src/services/importer/discogs/writer.js");
+    await imp(env, dump("zero-a.xml", "artists", `<artist><id>9001</id><name>Hardening Artist</name></artist>`), "artists"); // credited by master()
+    const before = unresolvedCounts(env.db);
+    await imp(env, dump("zero.xml", "releases",
+      `<release id="8880" status="Accepted"><artists><artist><id>0</id><name>Someone</name><anv/><join/><role/><tracks/></artist></artists><title>No master</title><labels><label name="Nobody" catno="N1" id="0"/></labels><formats><format name="Vinyl" qty="1" text=""/></formats><master_id is_main_release="false">0</master_id></release>`), "releases");
+    await imp(env, dump("zero-m.xml", "masters", master(8881, 0)), "masters");
+    await imp(env, dump("zero-l.xml", "labels", `<label><id>8882</id><name>Zero Parent</name><parentLabel id="0">None</parentLabel><data_quality>Correct</data_quality></label>`), "labels");
+    expect(releaseRow(env, 8880)).toMatchObject({ master_id: null, discogs_master_id: null });
+    expect(q(env, "SELECT discogs_artist_id, name FROM release_artists ra JOIN releases r ON r.id = ra.release_id WHERE r.discogs_release_id = 8880")).toEqual({ discogs_artist_id: null, name: "Someone" });
+    expect(q(env, "SELECT discogs_label_id FROM release_labels rl JOIN releases r ON r.id = rl.release_id WHERE r.discogs_release_id = 8880").discogs_label_id).toBeNull();
+    expect(masterRow(env, 8881)).toMatchObject({ main_release_discogs_id: null, main_release_id: null });
+    expect(q(env, "SELECT parent_discogs_label_id FROM labels WHERE discogs_label_id = 8882").parent_discogs_label_id).toBeNull();
+    expect(unresolvedCounts(env.db)).toEqual(before);
+    // A record's own id of 0 is still invalid.
+    const r = await imp(env, dump("zero-id.xml", "releases", `<release id="0" status="Accepted"><title>Bad</title></release>`), "releases");
+    expect(r.failed).toBe(1);
+  });
+
+  it("credits to Discogs's placeholder artists (Various, Unknown Artist, No Artist) are reported apart from unresolved ones", async () => {
+    const env = setup();
+    const { unresolvedCounts } = await import("../src/services/importer/discogs/writer.js");
+    const before = unresolvedCounts(env.db);
+    const credit = (id: number, name: string) => `<artist><id>${id}</id><name>${name}</name><anv/><join/><role/><tracks/></artist>`;
+    await imp(env, dump("various.xml", "releases",
+      `<release id="8890" status="Accepted"><artists>${credit(194, "Various")}${credit(8899, "Missing Artist")}</artists><title>Compilation</title><formats><format name="CD" qty="1" text=""/></formats>` +
+      `<tracklist><track><position>1</position><title>T</title><duration/><artists>${credit(355, "Unknown Artist")}</artists></track></tracklist></release>`), "releases");
+    const after = unresolvedCounts(env.db);
+    expect(after.placeholder_artist_credits - before.placeholder_artist_credits).toBe(2);
+    expect(after.release_artist_credits - before.release_artist_credits).toBe(1);   // only the genuinely missing artist
+    expect(after.track_artist_credits - before.track_artist_credits).toBe(0);
+    // Stored as name-only credits, as before.
+    expect(env.db.prepare("SELECT discogs_artist_id, name FROM release_artists ra JOIN releases r ON r.id = ra.release_id WHERE r.discogs_release_id = 8890 ORDER BY position").all())
+      .toEqual([{ discogs_artist_id: 194, name: "Various" }, { discogs_artist_id: 8899, name: "Missing Artist" }]);
   });
 });

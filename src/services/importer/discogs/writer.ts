@@ -537,20 +537,33 @@ export function staleReferenceCounts(db: DB): Record<string, number> {
   return Object.fromEntries(Object.entries(STALE_PAIRS).map(([k, p]) => [k, (db.prepare(`SELECT COUNT(*) AS n FROM ${p.table} WHERE ${p.where}`).get() as { n: number }).n]));
 }
 
+/**
+ * Discogs's placeholder artists: credits point at them, but they are not in the artists dump, so
+ * they never link. Seen on the real 2025-12-01 import: 194 "Various" (1.30M release credits),
+ * 355 "Unknown Artist" (83k), 118760 "No Artist" (19k). They are stored as name-only credits and
+ * reported separately rather than as unresolved references.
+ */
+export const PLACEHOLDER_ARTIST_IDS = [194, 355, 118760] as const;
+const NOT_PLACEHOLDER = `discogs_artist_id NOT IN (${PLACEHOLDER_ARTIST_IDS.join(", ")})`;
+
 /** Counts rows that still point at entities not present in the catalog (by Discogs id). */
 export function unresolvedCounts(db: DB): Record<string, number> {
   const q = (sql: string) => (db.prepare(sql).get() as { n: number }).n;
+  const placeholders = ["release_artists", "release_extra_artists", "release_track_artists", "master_artists"]
+    .reduce((sum, t) => sum + q(`SELECT COUNT(*) AS n FROM ${t} WHERE artist_id IS NULL AND discogs_artist_id IN (${PLACEHOLDER_ARTIST_IDS.join(", ")})`), 0);
   return {
     releases_without_master: q("SELECT COUNT(*) AS n FROM releases WHERE master_id IS NULL AND discogs_master_id IS NOT NULL"),
-    release_artist_credits: q("SELECT COUNT(*) AS n FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
-    extra_artist_credits: q("SELECT COUNT(*) AS n FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
+    release_artist_credits: q(`SELECT COUNT(*) AS n FROM release_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND ${NOT_PLACEHOLDER}`),
+    extra_artist_credits: q(`SELECT COUNT(*) AS n FROM release_extra_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND ${NOT_PLACEHOLDER}`),
     release_labels: q("SELECT COUNT(*) AS n FROM release_labels WHERE label_id IS NULL AND discogs_label_id IS NOT NULL"),
     release_series: q("SELECT COUNT(*) AS n FROM release_series WHERE label_id IS NULL AND discogs_label_id IS NOT NULL"),
-    master_artist_credits: q("SELECT COUNT(*) AS n FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
-    track_artist_credits: q("SELECT COUNT(*) AS n FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL"),
+    master_artist_credits: q(`SELECT COUNT(*) AS n FROM master_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND ${NOT_PLACEHOLDER}`),
+    track_artist_credits: q(`SELECT COUNT(*) AS n FROM release_track_artists WHERE artist_id IS NULL AND discogs_artist_id IS NOT NULL AND ${NOT_PLACEHOLDER}`),
     artist_aliases: q("SELECT COUNT(*) AS n FROM artist_aliases WHERE alias_artist_id IS NULL AND discogs_alias_id IS NOT NULL"),
     artist_members: q("SELECT COUNT(*) AS n FROM artist_members WHERE member_artist_id IS NULL AND discogs_member_id IS NOT NULL"),
     label_parents: q("SELECT COUNT(*) AS n FROM labels WHERE parent_label_id IS NULL AND parent_discogs_label_id IS NOT NULL"),
     masters_main_release: q("SELECT COUNT(*) AS n FROM masters WHERE main_release_id IS NULL AND main_release_discogs_id IS NOT NULL"),
+    // Not unresolved: credits to Discogs's placeholder artists (Various, Unknown Artist, No Artist).
+    placeholder_artist_credits: placeholders,
   };
 }

@@ -69,10 +69,19 @@ Other real-data observations:
 - `master/videos` appears in about 92% of masters and is deliberately ignored.
 - `release/videos/video/description` holds free text, often a Discogs URL, and is ignored.
 
+### Conventions found on the full import
+
+- **`0` means "no reference".** Examples: `<master_id>0</master_id>` on 7.79M releases without a
+  master, and credit or label IDs of 0. The parser now reads 0 as absent (migration 009 repairs
+  earlier imports).
+- **Placeholder artists aren't in the artists dump:** 194 Various, 355 Unknown Artist and 118760
+  No Artist. They're kept as name-only credits and reported separately.
+
 ## PARSER CHANGES REQUIRED
 
 1. `release/series` was added (parser, writer, reconcile, search, API, coverage list, migration 005,
-   and tests). The synthetic fixture release 401 now carries two series: one resolved, one unresolved.
+   and tests).
+2. A reference ID of `0` is now read as "none" (parser; migration 009 repairs earlier data). The synthetic fixture release 401 now carries two series: one resolved, one unresolved.
 
 No other changes were needed. The parser already handles:
 - the `<id>` child and the `id` attribute forms;

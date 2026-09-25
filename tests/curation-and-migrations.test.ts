@@ -157,6 +157,7 @@ describe("migrations", () => {
     });
     const before = counts();
     const pressings = (db.prepare("SELECT COUNT(*) AS n FROM releases").get() as any).n;
+    expect(migrateDown(db)).toBe("009_zero_ids_and_view_compat.sql");
     expect(migrateDown(db)).toBe("008_deferred_indexes.sql");
     expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql"); // newer migrations revert first
@@ -171,6 +172,7 @@ describe("migrations", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM catalog_search").get() as any).n).toBeGreaterThan(0);
     // Once Discogs-imported data exists, reverting is refused instead of losing it.
     db.prepare("INSERT INTO artists (name, sort_name, discogs_artist_id, created_at) VALUES ('X', 'X', 1, 'now')").run();
+    expect(migrateDown(db)).toBe("009_zero_ids_and_view_compat.sql");
     expect(migrateDown(db)).toBe("008_deferred_indexes.sql");
     expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
@@ -184,6 +186,7 @@ describe("migrations", () => {
     const cols = () => (db.prepare("PRAGMA table_info(catalog_import_runs)").all() as any[]).map((c) => c.name);
     expect(cols()).toContain("search_mode");
     expect(db.prepare("SELECT name, stale_since FROM search_index_state").all()).toEqual([{ name: "catalog", stale_since: null }]);
+    expect(migrateDown(db)).toBe("009_zero_ids_and_view_compat.sql");
     expect(migrateDown(db)).toBe("008_deferred_indexes.sql");
     expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
@@ -196,9 +199,31 @@ describe("migrations", () => {
     expect(db.pragma("foreign_key_check")).toEqual([]);
   });
 
+  it("009 clears 0 Discogs references and rewrites library_items without group_concat ORDER BY", () => {
+    const { db } = fullSetup();
+    const viewSql = () => (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'library_items'").get() as any).sql as string;
+    const items = () => db.prepare("SELECT * FROM library_items ORDER BY item_type, item_id").all();
+    const now = items();
+    expect(viewSql()).not.toMatch(/ORDER BY ra\.position\)\s+FROM/);
+    expect(viewSql()).not.toMatch(/', ' ORDER BY/);
+    // Same rows (including ordered artist credits and genres) as the original definition.
+    expect(migrateDown(db)).toBe("009_zero_ids_and_view_compat.sql");
+    expect(viewSql()).toMatch(/group_concat\(genre, ', ' ORDER BY genre\)/);
+    expect(items()).toEqual(now);
+    // Zeros written by the old parser are repaired on the way up.
+    const rel = (db.prepare("SELECT id FROM releases LIMIT 1").get() as any).id;
+    db.prepare("UPDATE releases SET discogs_master_id = 0, master_id = NULL WHERE id = ?").run(rel);
+    db.prepare("UPDATE release_artists SET discogs_artist_id = 0, artist_id = NULL WHERE release_id = ?").run(rel); // as the old parser left them: a 0 id never links
+    migrate(db);
+    expect(db.prepare("SELECT discogs_master_id FROM releases WHERE id = ?").get(rel)).toEqual({ discogs_master_id: null });
+    expect((db.prepare("SELECT COUNT(*) AS n FROM release_artists WHERE discogs_artist_id = 0").get() as any).n).toBe(0);
+    expect(items().length).toBe(now.length);
+  });
+
   it("005 adds release_series and refuses to revert once series data exists", () => {
     const { db } = fullSetup();
     const rel = (db.prepare("SELECT id FROM releases LIMIT 1").get() as any).id;
+    expect(migrateDown(db)).toBe("009_zero_ids_and_view_compat.sql");
     expect(migrateDown(db)).toBe("008_deferred_indexes.sql");
     expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");
@@ -207,6 +232,7 @@ describe("migrations", () => {
     expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'release_series'").get()).toBeUndefined();
     migrate(db);
     db.prepare("INSERT INTO release_series (release_id, discogs_label_id, name) VALUES (?, 1, 'S')").run(rel);
+    expect(migrateDown(db)).toBe("009_zero_ids_and_view_compat.sql");
     expect(migrateDown(db)).toBe("008_deferred_indexes.sql");
     expect(migrateDown(db)).toBe("007_import_scan_indexes.sql");
     expect(migrateDown(db)).toBe("006_reconcile_indexes.sql");

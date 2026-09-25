@@ -25,7 +25,14 @@ function discogsId(v: string | null | undefined, what: string, required = true):
     return null;
   }
   if (!/^\d{1,12}$/.test(v.trim())) throw new RecordError(`${what}: id “${v.slice(0, 40)}” is not a number`);
-  return Number(v.trim());
+  const id = Number(v.trim());
+  // Discogs writes 0 where a reference is absent (<master_id>0</master_id> on releases without a
+  // master: 7.79M of 18.7M in the 2025-12-01 dump). 0 is never a real id.
+  if (id === 0) {
+    if (required) throw new RecordError(`${what}: id 0 is not a valid Discogs id`);
+    return null;
+  }
+  return id;
 }
 
 function recordId(n: XNode, what: string): number {

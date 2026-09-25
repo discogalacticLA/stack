@@ -185,6 +185,58 @@ releases, about 62 GB for releases alone at 3.9 KB each, and about 1.5–2 hours
 rates. This is **an extrapolation**: early records (low IDs) may not be representative, and
 slowdown beyond 50k real rows hasn't been measured.
 
+### Real dump: FULL import of 2025-12-01 (owner's Mac, `import-all --bulk`, 2026-09-25)
+
+| Step | Records | Rejected | Time |
+|---|---|---|---|
+| Artists | 9,837,952 | 2 (no name) | 301.5 s (~32,600/s) |
+| Labels | 2,315,372 | 1 (no name) | 42.5 s |
+| Masters | 2,500,583 | 0 | 216.2 s |
+| Releases | 18,724,693 | 0 | 9,726 s (2 h 42 min, ~1,925/s) |
+| Index rebuild (36 indexes) | | | 1,402 s (23 min) |
+| Catalog-wide linking | | | 549 s (9 min) |
+| Search rebuild | 33,378,597 documents | | 656 s (11 min) |
+| **Total** | | | **about 3 h 35 min**; database 73 GB |
+
+Where the releases time went:
+
+| Part | Time |
+|---|---|
+| Rows + commit | 6,510 s |
+| Lookups | 1,548 s |
+| Parse + gunzip | 948 s |
+| Hashing | 343 s |
+| Normalising | 234 s |
+| Provenance | 144 s |
+
+- **Why releases ran at ~1,925/s rather than the benchmark's ~4,300/s:** here artists, labels and
+  masters already existed, so every credit is linked as it's written. That means an ID lookup,
+  plus a foreign-key check against a 9.8M-row artists table. The benchmark had nothing to link.
+  Possible speed-ups: turn foreign-key checks off during bulk writes and verify once at the end;
+  cache hot IDs.
+- **Two findings from the unresolved counts, both fixed (migration 009, parser):**
+  1. **Discogs writes `0` for an absent reference.** 7,790,378 releases carry
+     `<master_id>0</master_id>`, meaning they belong to no master. The old parser stored 0 as a
+     Discogs ID, so they were counted as "unresolved". The parser now reads 0 as "no reference".
+     Migration 009 clears existing zeros in every reference column, each update via its
+     unresolved-reference index. A record's *own* ID of 0 is still rejected.
+  2. **Discogs's placeholder artists aren't in the artists dump.** They are 194 "Various"
+     (1,304,596 release credits), 355 "Unknown Artist" (82,792) and 118760 "No Artist" (18,769).
+     They are stored as name-only credits, and are now reported as `placeholder_artist_credits`
+     instead of unresolved references.
+- **Genuinely unresolved after the fixes (estimated from the counts):**
+  - about 160 master links;
+  - about 33 release-artist credits;
+  - 162 release labels and 33 series;
+  - 109,298 label parents, of which 109,093 point at label 212, which isn't in the labels dump;
+  - smaller numbers of other credits, aliases and members.
+- **Heads-up for the next monthly update:** records from the old parser were hashed with the 0
+  IDs. The ~7.8M releases without a master will therefore look "changed" once and be rewritten.
+  Run that month's update with `--bulk`.
+- **Older sqlite3 tools:** the `library_items` view used `group_concat(… ORDER BY …)` (SQLite
+  3.44+), so the SQLite bundled with macOS couldn't open the database at all. Migration 009
+  rewrites the view in a compatible form, with identical output (tested).
+
 ### Real dump: first 1,000,000 releases (owner's Mac, incremental search)
 
 | Measurement | Value |

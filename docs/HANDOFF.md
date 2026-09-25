@@ -6,7 +6,7 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
 
 - Local prototype only. It is not production-ready and not deployed, and it has no real payments.
 - Branch `claude/music-archive-marketplace-ibxhs3` in the `stack` repo.
-- `npm run check` runs the typecheck and 137 vitest tests across 9 files, all passing at the time
+- `npm run check` runs the typecheck and 140 vitest tests across 9 files, all passing at the time
   of writing.
 
 ## Milestones done
@@ -50,8 +50,13 @@ Snapshot of where the prototype stands, for the next person (or AI assistant) pi
   - a 50k-release benchmark.
 
   One unknown structure, `release/series`, was found and is now imported (migration 005).
-  Benchmarks were run up to 1M real releases (maintained indexes) and 300k (bulk mode). A full
-  import has not been run yet. The exact download link
+  **The full import succeeded on 2026-09-25:**
+  - 9.84M artists, 2.32M labels, 2.50M masters and 18.72M releases;
+  - 3 invalid records;
+  - about 3 h 35 min with `--bulk`, 73 GB.
+
+  It revealed Discogs's "0 = no reference" convention and its placeholder artists, both now
+  handled (migration 009). The exact download link
   host (data.discogs.com or S3) is still unconfirmed; the file naming and year folders are
   confirmed.
 - No browser walkthrough or screenshots were produced for the latest milestone.
@@ -86,8 +91,8 @@ before any hosting.**
 
 ## Suggested next steps
 
-1. Full `import-all --bulk` into a dedicated database file on the Mac. Then measure search latency
-   on the full catalog, and improve prefix and short-term queries.
+1. Apply migration 009 to the full database, then measure and improve search latency on the full
+   catalog (prefix and short terms).
 2. Validate the collection importers against real user exports.
 3. Link user library holdings to catalog releases in bulk, via Discogs `release_id`, after a
    catalog import.
